@@ -181,7 +181,7 @@ class Diffusion(nn.Module):
         noisy_images, noise = self.forward_process(x0, t)
         
         # Предсказание шума моделью
-        pred_noise = model(noisy_images, t, audio_embeds)
+        pred_noise = model(noisy_images, t.float(), audio_embeds)
         
         # MSE между реальным и предсказанным шумом
         return F.mse_loss(pred_noise, noise)

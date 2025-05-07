@@ -8,23 +8,39 @@ class UNetWithCrossAttention(nn.Module):
         self.image_size = config.image_size
         self.audio_ctx_dim = config.audio_ctx_dim  # d_audio из энкодера
         
+#         # Downsample блоки
+#         self.down_blocks = nn.ModuleList([
+#             DownBlock(3, 64),
+#             DownBlock(64, 128),
+#             DownBlock(128, 256),
+#             DownBlock(256, 512)
+#         ])
+#
+#         # Middle блок с Cross-Attention
+#         self.mid_block = MidBlock(512, self.audio_ctx_dim)
+#
+#         # Upsample блоки
+#         self.up_blocks = nn.ModuleList([
+#             UpBlock(512, 256),
+#             UpBlock(256, 128),
+#             UpBlock(128, 64),
+#             UpBlock(64, 3)
+#         ])
         # Downsample блоки
         self.down_blocks = nn.ModuleList([
-            DownBlock(3, 64),
-            DownBlock(64, 128),
-            DownBlock(128, 256),
-            DownBlock(256, 512)
+            DownBlock(3, 16),
+            DownBlock(16, 32),
+            DownBlock(32, 64)
         ])
-        
+
         # Middle блок с Cross-Attention
-        self.mid_block = MidBlock(512, self.audio_ctx_dim)
-        
+        self.mid_block = MidBlock(64, self.audio_ctx_dim)
+
         # Upsample блоки
         self.up_blocks = nn.ModuleList([
-            UpBlock(512, 256),
-            UpBlock(256, 128),
-            UpBlock(128, 64),
-            UpBlock(64, 3)
+            UpBlock(64, 32),
+            UpBlock(32, 16),
+            UpBlock(16, 3)
         ])
         
         # Нормализация и активация
@@ -54,7 +70,7 @@ class UNetWithCrossAttention(nn.Module):
             x = block(x, skips.pop(), t)
 
         # Финальная нормализация
-        return self.norm(x)
+        return x
 
 
 class DownBlock(nn.Module):
@@ -62,6 +78,7 @@ class DownBlock(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
+        self.BN1 = nn.BatchNorm2d(out_ch)
         self.downsample = nn.Conv2d(out_ch, out_ch, 3, stride=2, padding=1)
         self.time_embed = nn.Sequential(
             nn.Linear(1, out_ch),
@@ -72,7 +89,9 @@ class DownBlock(nn.Module):
     def forward(self, x, t):
         h = F.silu(self.conv1(x))
         h = h + self.time_embed(t[:, None])[:, :, None, None]
-        h = F.silu(self.conv2(h))
+        h = self.conv2(h)
+        h = self.BN1(h)
+        h = F.silu(h)
         return self.downsample(h)
 
 
@@ -80,35 +99,38 @@ class MidBlock(nn.Module):
     """Средний блок с Cross-Attention"""
     def __init__(self, dim, audio_ctx_dim):
         super().__init__()
-        self.norm1 = nn.GroupNorm(32, dim)
         self.conv1 = nn.Conv2d(dim, dim, 3, padding=1)
-        
+        self.BN1 = nn.BatchNorm2d(dim)
+
         # Cross-Attention
         self.attn = CrossAttentionBlock(dim, audio_ctx_dim, dim)
         
-        self.norm2 = nn.GroupNorm(32, dim)
+        self.BN2 = nn.BatchNorm2d(dim)
         self.conv2 = nn.Conv2d(dim, dim, 3, padding=1)
         
     def forward(self, x, t, audio_embed):
         B, C, H, W = x.shape
-        h = self.norm1(x)
-        h = F.silu(self.conv1(h))
+        h = self.conv1(x)
+        h = self.BN1(h)
+        h = F.silu(h)
         
         # Применяем Cross-Attention
         h_flat = h.view(B, C, H*W).permute(0, 2, 1)  # [B, H*W, C]
         h_attn = self.attn(h_flat, audio_embed)      # [B, H*W, C]
         h = h_attn.permute(0, 2, 1).view(B, C, H, W)
         
-        h = self.norm2(h)
+        h = self.BN2(h)
         h = F.silu(self.conv2(h))
-        return x + h
+        #Зачем тут изначально стояло x + h????
+        return h+x
 
 
 class UpBlock(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
-        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.upsample = nn.ConvTranspose2d(in_ch*2, in_ch*2, 3, stride=2, padding=1)
         self.conv1 = nn.Conv2d(in_ch*2, out_ch, 3, padding=1)
+        self.BN1 = nn.BatchNorm2d(out_ch)
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
         self.time_embed = nn.Sequential(
             nn.Linear(1, out_ch),
@@ -118,8 +140,11 @@ class UpBlock(nn.Module):
         
     def forward(self, x, skip, t):
         x = torch.cat([x, skip], dim=1)
-        x = self.upsample(x)
-        h = F.silu(self.conv1(x))
+        x = self.upsample(x, output_size=(-1, x.shape[-3], x.shape[-2]*2, x.shape[-1]*2))
+        x = F.silu(x)
+        h = self.conv1(x)
+        h = self.BN1(h)
+        h = F.silu(h)
         h = h + self.time_embed(t[:, None])[:, :, None, None]
         h = F.silu(self.conv2(h))
         return h
