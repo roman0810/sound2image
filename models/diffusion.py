@@ -68,61 +68,57 @@ class Diffusion(nn.Module):
         noisy_images = sqrt_alpha_cumprod * x0 + sqrt_one_minus_alpha * noise
         return noisy_images, noise
 
-    def reverse_process(self,
-                       model: nn.Module,
-                       audio_embeds: torch.Tensor,
-                       batch_size: int = 1,
-                       img_size: int = None,
-                       timesteps: int = None,
-                       use_ddim: bool = False,
-                       eta: float = 0.0) -> torch.Tensor:
+    def reverse_process(
+        self,
+        model: nn.Module,
+        audio_embeds: torch.Tensor,
+        batch_size: int = 1,
+        img_size: int = None,
+        timesteps: int = None,
+        use_ddim: bool = False,
+        eta: float = 0.0,
+        guidance_scale: float = 7.5,  # Коэффициент guidance (обычно 5-10)
+        unconditional_prob: float = 0.1,  # Вероятность безусловного режима при обучении
+    ) -> torch.Tensor:
         """
-        Обратный процесс диффузии (генерация изображений)
-        
+        Обратный процесс диффузии с Classifier-Free Guidance.
+
         Args:
-            model: U-Net модель с Cross-Attention
+            model: U-Net модель с поддержкой unconditional_embed=None
             audio_embeds: Аудио эмбеддинги [batch, seq_len, d_audio]
-            batch_size: Количество генерируемых изображений
-            img_size: Размер изображения (если None - берет self.image_size)
-            timesteps: Число шагов денойзинга (если None - берет self.timesteps)
-            use_ddim: Использовать DDIM sampling
-            eta: Параметр eta для DDIM
-        Returns:
-            Сгенерированные изображения [batch, 3, H, W]
+            guidance_scale: Сила влияния условия (>=1). 1 = нет guidance
+            unconditional_prob: Вероятность подачи None как условия при обучении
         """
         img_size = img_size or self.image_size
         timesteps = timesteps or self.timesteps
-        
-        # Начальное случайное изображение
-        x = torch.randn(
-            (batch_size, 3, img_size, img_size),
-            device=self.device
-        )
-        
+
+        # Начальный шум
+        x = torch.randn((batch_size, 3, img_size, img_size), device=self.device)
+
         # Определение шагов для sampling
-        if use_ddim:
-            # DDIM sampling с пропуском шагов
-            step_sequence = range(0, self.timesteps, self.timesteps // timesteps)
-            sequence = list(reversed(step_sequence))
-        else:
-            # Стандартный DDPM sampling
-            sequence = list(reversed(range(0, timesteps)))
-        
-        # Постепенный денойзинг
+        sequence = list(reversed(range(0, timesteps, timesteps // timesteps)))
+
         for i in sequence:
-            t = torch.full((batch_size,), i, device=self.device, dtype=torch.float)
-            
-            # Предсказание шума моделью
+            t = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
+
+            # Два предсказания: условное и безусловное
             with torch.no_grad():
-                pred_noise = model(x, t, audio_embeds)
-            
-            # Коэффициенты для обновления x
+                # Условное предсказание (с аудио)
+                pred_noise_cond = model(x, t.float(), audio_embeds)
+
+                # Безусловное предсказание (None вместо audio_embeds)
+                pred_noise_uncond = model(x, t.float(), None)
+
+                # Комбинирование через CFG
+                pred_noise = pred_noise_uncond + guidance_scale * (pred_noise_cond - pred_noise_uncond)
+
+            # Обновление x (DDIM или DDPM)
             if use_ddim:
-                x = self.ddim_step(x, pred_noise, t.int(), i, eta)
+                x = self.ddim_step(x, pred_noise, t, i, eta)
             else:
-                x = self.ddpm_step(x, pred_noise, t.int(), i)
-        
-        return x.clamp(-1, 1)  # Нормализация к [-1, 1]
+                x = self.ddpm_step(x, pred_noise, t, i)
+
+        return x.clamp(-1, 1)
 
     def ddpm_step(self, x: torch.Tensor, pred_noise: torch.Tensor, t: torch.Tensor, i: int) -> torch.Tensor:
         """Один шаг денойзинга по DDPM."""
