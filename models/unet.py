@@ -10,21 +10,22 @@ class UNetWithCrossAttention(nn.Module):
         
         # Downsample блоки
         self.down_blocks = nn.ModuleList([
-            DownBlock(3, 64, 0.3),
+            DownBlock(3, 32, 0.3),
+            DownBlock(32, 64, 0.3),
             DownBlock(64, 128, 0.3),
-            DownBlock(128, 256, 0.3),
-            DownBlock(256, 512, 0.3)
+            DownBlock(128, 256, 0.3)
         ])
 
         # Middle блок с Cross-Attention
-        self.mid_block = MidBlock(512, self.audio_ctx_dim, 0.2)
+        self.mid_block_half = MidBlock(128, self.audio_ctx_dim, 0.2)
+        self.mid_block_bot = MidBlock(256, self.audio_ctx_dim, 0.2)
 
         # Upsample блоки
         self.up_blocks = nn.ModuleList([
-            UpBlock(512, 256, 0.3),
             UpBlock(256, 128, 0.3),
             UpBlock(128, 64, 0.3),
-            UpBlock(64, 3, 0.3)
+            UpBlock(64, 32, 0.3),
+            UpBlock(32, 3, 0.3)
         ])
         # # Downsample блоки
         # self.down_blocks = nn.ModuleList([
@@ -67,7 +68,12 @@ class UNetWithCrossAttention(nn.Module):
             skips.append(x)
         
         # Middle block
-        x = self.mid_block(x, t, audio_embed)
+        x = self.mid_block_bot(x, t, audio_embed)
+        # Готовим дополнительную CrossAttention обработку для последнего моста
+        skips[-2] = self.mid_block_half(skips[-2], t, audio_embed)
+
+        print(len(skips))
+
         
         # Upsample path
         for block in self.up_blocks:
@@ -130,7 +136,7 @@ class MidBlock(nn.Module):
         h = F.silu(self.conv2(h))
         h = self.drop1(h)
         #Зачем тут изначально стояло x + h????
-        return h+x
+        return h
 
 
 class UpBlock(nn.Module):
