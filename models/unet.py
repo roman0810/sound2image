@@ -17,6 +17,7 @@ class UNetWithCrossAttention(nn.Module):
         ])
 
         # Middle блок с Cross-Attention
+        # self.mid_block_top = MidBlock(64, self.audio_ctx_dim, 0.2)
         self.mid_block_half = MidBlock(128, self.audio_ctx_dim, 0.2)
         self.mid_block_bot = MidBlock(256, self.audio_ctx_dim, 0.2)
 
@@ -71,8 +72,6 @@ class UNetWithCrossAttention(nn.Module):
         x = self.mid_block_bot(x, t, audio_embed)
         # Готовим дополнительную CrossAttention обработку для последнего моста
         skips[-2] = self.mid_block_half(skips[-2], t, audio_embed)
-
-        print(len(skips))
 
         
         # Upsample path
