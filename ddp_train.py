@@ -9,7 +9,7 @@ import torch
 from archisound import ArchiSound
 import time
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -62,7 +62,7 @@ class Trainer:
         snapshot = torch.load(snapshot_path)
         self.model.load_state_dict(snapshot["MODEL_STATE"])
         self.epochs_run = snapshot["EPOCHS_RUN"]
-        self.train_loses = snapshot["TRAIN_LOSSES"]
+        self.train_losses = snapshot["TRAIN_LOSSES"]
         self.val_losses = snapshot["VAL_LOSSES"]
         print(f'Resuming training from snapshot at epoch {self.epochs_run}')
 
@@ -73,12 +73,12 @@ class Trainer:
             audio_embeds = None
         else:
             with torch.no_grad():
-                audio_embeds = autoencoder.encode(source)
+                audio_embeds = self.autoencoder.encode(source)
                 
             audio_embeds = audio_embeds.permute(0, 2, 1)  # [B, seq_len, d_audio]
 
         self.optimizer.zero_grad()
-        loss = self.diffusion.loss_fn(model, targets, audio_embeds)
+        loss = self.diffusion.loss_fn(self.model, targets, audio_embeds)
         loss.backward()
         self.optimizer.step()
 
@@ -87,10 +87,10 @@ class Trainer:
     def _validate_batch(self, source, targets):
         self.model.eval()
         with torch.no_grad():
-            audio_embeds = autoencoder.encode(source)
+            audio_embeds = self.autoencoder.encode(source)
             audio_embeds = audio_embeds.permute(0, 2, 1)
 
-            loss = self.diffusion.loss_fn(model, targets, audio_embeds)
+            loss = self.diffusion.loss_fn(self.model, targets, audio_embeds)
         return loss.item()
 
     def _run_epoch(self, epoch):
@@ -111,8 +111,8 @@ class Trainer:
             else:
                 val_epo_losses.append(self._validate_batch(source, targets))
 
-        self.train_loses.append(sum(train_epo_losses)/len(train_epo_losses))
-        self.val_losses.append(sum(train_epo_losses)/len(train_epo_losses))
+        self.train_losses.append(sum(train_epo_losses)/len(train_epo_losses))
+        self.val_losses.append(sum(val_epo_losses)/len(val_epo_losses))
 
         print(f'GPU:{self.global_rank} | Epoch {epoch} | Time {int(time.time()-start_time)}')
 
@@ -120,11 +120,11 @@ class Trainer:
         snapshot = {}
         snapshot["MODEL_STATE"] = self.model.module.state_dict()
         snapshot["EPOCHS_RUN"] = epoch
-        snapshot["TRAIN_LOSSES"] = self.train_loses
+        snapshot["TRAIN_LOSSES"] = self.train_losses
         snapshot["VAL_LOSSES"] = self.val_losses
 
         torch.save(snapshot, f"{name}.pt")
-        print(f'Epoch {epoch} | Training snapshot saved at snapshot.pt')
+        print(f'Epoch {epoch} | Training snapshot saved at {name}.pt')
 
     def train(self, max_epochs: int):
         b_sz = len(next(iter(self.train_data))[0])
@@ -176,10 +176,10 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "image_path": "data/images",
                           "sound_path": "data/sounds",
                           "lr": 0.0005,
-                          "BS": 256,
+                          "BS": 128,
                           "unconditional_prob": 0.08,
                           "timesteps": 1000,
-                          "num_val_batches": 10000//256,
+                          "num_val_batches": 10000//128,
                           "save_every": save_every,
                           "snapshot_path": snapshot_path})
 

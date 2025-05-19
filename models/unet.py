@@ -46,7 +46,7 @@ class UNetWithCrossAttention(nn.Module):
         # ])
         
         # Нормализация и активация
-        self.norm = nn.GroupNorm(1, 3)
+        # self.norm = nn.GroupNorm(1, 3)
         self.act = nn.SiLU()
         
     def forward(self, x, t, audio_embed=None):
