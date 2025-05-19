@@ -154,17 +154,13 @@ def prepare_dataloader(dataset: Dataset, batch_size: int, num_workers: int=8):
         num_workers=num_workers,
         pin_memory=True,
         shuffle=False,
-        sampler=DistributedSampler(dataset),
+        sampler=DistributedSampler(dataset, shuffle=True, drop_last=True),
         drop_last = True
     )
 
 
 # испытанно, что максимум одного узла:
 # BS = 128
-# В теории после рездеоения нагрузки на N улов эти числа должны поделенны на N,
-# однако локальный DataLoader со слишком большим BS может забить ram узла
-
-# можно хорошо сэкономить работая лишь с одним DataLoader для обучения и валидации
 
 def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt"):
     # запускаем движок распределенного обучения
