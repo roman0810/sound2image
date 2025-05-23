@@ -2,11 +2,11 @@ from utils.config import ModelConfig
 from models.unet import UNetWithCrossAttention
 from models.diffusion import Diffusion
 from utils.SoundDataset import SoundDataset
+from models.AudioEncoder import AudioEncoder
 
 import os
 import numpy as np
 import torch
-from archisound import ArchiSound
 import time
 
 from torch.utils.data import DataLoader, Dataset
@@ -37,7 +37,9 @@ class Trainer:
                                     image_size=config.image_size,
                                     device=torch.device(f'cuda:{self.local_rank}'))
 
-        self.autoencoder = ArchiSound.from_pretrained("dmae1d-ATC64-v2").to(torch.device(f'cuda:{self.local_rank}'))
+        self.encode = AudioEncoder("facebook/wav2vec2-base-960h",
+                                    torch.device(f'cuda:{self.local_rank}'),
+                                    config.sample_rate)
 
         self.model = model.to(self.local_rank)
         self.train_data = train_data
@@ -72,10 +74,8 @@ class Trainer:
         if torch.rand(1) < self.unconditional_prob:
             audio_embeds = None
         else:
-            with torch.no_grad():
-                audio_embeds = self.autoencoder.encode(source)
+            audio_embeds = self.encode(source)
                 
-            audio_embeds = audio_embeds.permute(0, 2, 1)  # [B, seq_len, d_audio]
 
         self.optimizer.zero_grad()
         loss = self.diffusion.loss_fn(self.model, targets, audio_embeds)
@@ -87,8 +87,7 @@ class Trainer:
     def _validate_batch(self, source, targets):
         self.model.eval()
         with torch.no_grad():
-            audio_embeds = self.autoencoder.encode(source)
-            audio_embeds = audio_embeds.permute(0, 2, 1)
+            audio_embeds = self.encode(source)
 
             loss = self.diffusion.loss_fn(self.model, targets, audio_embeds)
         return loss.item()
@@ -168,7 +167,8 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
 
     # задаем параметры инициализации
     config = ModelConfig({"image_size": 128,
-                          "audio_ctx_dim": 32,
+                          "sample_rate": 48000,
+                          "audio_ctx_dim": 768,
                           "image_path": "data/images",
                           "sound_path": "data/sounds",
                           "lr": 0.0005,
