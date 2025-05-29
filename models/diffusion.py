@@ -118,7 +118,7 @@ class Diffusion(nn.Module):
             else:
                 x = self.ddpm_step(x, pred_noise, t, i)
 
-        return x.clamp(-1, 1)
+        return x.clamp(0, 1)
 
     def ddpm_step(self, x: torch.Tensor, pred_noise: torch.Tensor, t: torch.Tensor, i: int) -> torch.Tensor:
         """Один шаг денойзинга по DDPM."""

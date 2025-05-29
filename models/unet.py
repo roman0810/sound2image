@@ -7,47 +7,29 @@ class UNetWithCrossAttention(nn.Module):
         super().__init__()
         self.image_size = config.image_size
         self.audio_ctx_dim = config.audio_ctx_dim  # d_audio из энкодера
+
+        layer_sizes = [3,64,128,256,512]
         
         # Downsample блоки
         self.down_blocks = nn.ModuleList([
-            DownBlock(3, 32, 0.3),
-            DownBlock(32, 64, 0.3),
-            DownBlock(64, 128, 0.3),
-            DownBlock(128, 256, 0.3)
+            DownBlock(layer_sizes[0], layer_sizes[1], 0.3),
+            DownBlock(layer_sizes[1], layer_sizes[2], 0.3),
+            DownBlock(layer_sizes[2], layer_sizes[3], 0.3),
+            DownBlock(layer_sizes[3], layer_sizes[4], 0.3)
         ])
 
         # Middle блок с Cross-Attention
         # self.mid_block_top = MidBlock(64, self.audio_ctx_dim, 0.2)
-        self.mid_block_half = MidBlock(128, self.audio_ctx_dim, 0.2)
-        self.mid_block_bot = MidBlock(256, self.audio_ctx_dim, 0.2)
+        self.mid_block_half = MidBlock(layer_sizes[3], self.audio_ctx_dim, 0.2)
+        self.mid_block_bot = MidBlock(layer_sizes[4], self.audio_ctx_dim, 0.2)
 
         # Upsample блоки
         self.up_blocks = nn.ModuleList([
-            UpBlock(256, 128, 0.3),
-            UpBlock(128, 64, 0.3),
-            UpBlock(64, 32, 0.3),
-            UpBlock(32, 3, 0.3)
+            UpBlock(layer_sizes[4], layer_sizes[3], 0.3),
+            UpBlock(layer_sizes[3], layer_sizes[2], 0.3),
+            UpBlock(layer_sizes[2], layer_sizes[1], 0.3),
+            UpBlock(layer_sizes[1], layer_sizes[0], 0.3, True)
         ])
-        # # Downsample блоки
-        # self.down_blocks = nn.ModuleList([
-        #     DownBlock(3, 16),
-        #     DownBlock(16, 32),
-        #     DownBlock(32, 64)
-        # ])
-        #
-        # # Middle блок с Cross-Attention
-        # self.mid_block = MidBlock(64, self.audio_ctx_dim)
-        #
-        # # Upsample блоки
-        # self.up_blocks = nn.ModuleList([
-        #     UpBlock(64, 32),
-        #     UpBlock(32, 16),
-        #     UpBlock(16, 3)
-        # ])
-        
-        # Нормализация и активация
-        # self.norm = nn.GroupNorm(1, 3)
-        self.act = nn.SiLU()
         
     def forward(self, x, t, audio_embed=None):
         """
@@ -139,7 +121,7 @@ class MidBlock(nn.Module):
 
 
 class UpBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, p_drop=0.3):
+    def __init__(self, in_ch, out_ch, p_drop=0.3, final=False):
         super().__init__()
         self.upsample = nn.ConvTranspose2d(in_ch*2, in_ch*2, 3, stride=2, padding=1)
         self.conv1 = nn.Conv2d(in_ch*2, out_ch, 3, padding=1)
@@ -151,6 +133,11 @@ class UpBlock(nn.Module):
             nn.Linear(out_ch, out_ch)
         )
         self.drop1 = nn.Dropout2d(p_drop)
+
+        if final:
+            self.final_act = torch.nn.Sigmoid()
+        else:
+            self.final_act = F.silu
         
     def forward(self, x, skip, t):
         x = torch.cat([x, skip], dim=1)
@@ -160,8 +147,9 @@ class UpBlock(nn.Module):
         h = self.BN1(h)
         h = F.silu(h)
         h = h + self.time_embed(t[:, None])[:, :, None, None]
-        h = F.silu(self.conv2(h))
         h = self.drop1(h)
+        h = self.final_act(self.conv2(h))
+
         return h
 
 

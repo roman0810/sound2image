@@ -25,6 +25,7 @@ class Trainer:
     def __init__(self,
         model: torch.nn.Module,
         train_data: DataLoader,
+        val_data: DataLoader,
         optimizer: torch.optim.Optimizer,
         config: ModelConfig
     ) -> None:
@@ -43,11 +44,11 @@ class Trainer:
 
         self.model = model.to(self.local_rank)
         self.train_data = train_data
+        self.val_data = val_data
         self.optimizer = optimizer
         self.unconditional_prob = config.unconditional_prob
         self.save_every = config.save_every
 
-        self.num_val_batches = config.num_val_batches
         self.epochs_run = 0
         self.train_losses = []
         self.val_losses = []
@@ -101,14 +102,17 @@ class Trainer:
 
         # DataLoder не перемешивает данные, поэтому используем его 
         # единственный объект для обучения и валидации
-        for i , (source, targets) in enumerate(self.train_data):
+        for source, targets in self.train_data:
             source = source.to(self.local_rank)
             targets = targets.to(self.local_rank)
 
-            if i < data_size - self.num_val_batches:
-                train_epo_losses.append(self._train_batch(source, targets))
-            else:
-                val_epo_losses.append(self._validate_batch(source, targets))
+            train_epo_losses.append(self._train_batch(source, targets))
+
+        for source, targets in self.val_data:
+            source = source.to(self.local_rank)
+            targets = targets.to(self.local_rank)
+
+            val_epo_losses.append(self._validate_batch(source, targets))
 
         self.train_losses.append(sum(train_epo_losses)/len(train_epo_losses))
         self.val_losses.append(sum(val_epo_losses)/len(val_epo_losses))
@@ -131,6 +135,7 @@ class Trainer:
 
         print(f"Training: Epoches {max_epochs-self.epochs_run} | BS {b_sz} | Batches {data_size}")
         for epoch in range(self.epochs_run, max_epochs):
+            self.train_data.sampler.set_epoch(epoch)
             self._run_epoch(epoch)
             if self.local_rank == 0 and epoch % self.save_every == 0:
                 self._save_snapshot(epoch, "snapshot")
@@ -172,19 +177,20 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "image_path": "data/images",
                           "sound_path": "data/sounds",
                           "lr": 0.0005,
-                          "BS": 128,
+                          "BS": 80,
                           "unconditional_prob": 0.08,
                           "timesteps": 1000,
-                          "num_val_batches": 10000//128,
                           "save_every": save_every,
                           "snapshot_path": snapshot_path})
 
     # инициализируем датасет, модель и оптимизатор
     dataset, model, optimizer = load_train_objs(config)
 
-    train_loader = prepare_dataloader(dataset, batch_size=config.BS)
+    train_datset, val_dataset = torch.utils.data.random_split(dataset, [len(dataset)-10000, 10000])
+    train_loader = prepare_dataloader(train_datset, batch_size=config.BS)
+    val_loader = prepare_dataloader(val_dataset, batch_size=config.BS, num_workers=2)
 
-    trainer = Trainer(model, train_loader, optimizer, config)
+    trainer = Trainer(model, train_loader, val_loader, optimizer, config)
 
     trainer.train(total_epochs)
     destroy_process_group()
