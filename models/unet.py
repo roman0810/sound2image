@@ -8,27 +8,27 @@ class UNetWithCrossAttention(nn.Module):
         self.image_size = config.image_size
         self.audio_ctx_dim = config.audio_ctx_dim  # d_audio из энкодера
 
-        layer_sizes = [3,64,128,256,512]
+        layer_sizes = [3,32,64,128,256]
         
         # Downsample блоки
         self.down_blocks = nn.ModuleList([
-            DownBlock(layer_sizes[0], layer_sizes[1], 0.3),
-            DownBlock(layer_sizes[1], layer_sizes[2], 0.3),
-            DownBlock(layer_sizes[2], layer_sizes[3], 0.3),
-            DownBlock(layer_sizes[3], layer_sizes[4], 0.3)
+            DownBlock(layer_sizes[0], layer_sizes[1], 0.1),
+            DownBlock(layer_sizes[1], layer_sizes[2], 0.1),
+            DownBlock(layer_sizes[2], layer_sizes[3], 0.1),
+            DownBlock(layer_sizes[3], layer_sizes[4], 0.1)
         ])
 
         # Middle блок с Cross-Attention
         # self.mid_block_top = MidBlock(64, self.audio_ctx_dim, 0.2)
-        self.mid_block_half = MidBlock(layer_sizes[3], self.audio_ctx_dim, 0.2)
-        self.mid_block_bot = MidBlock(layer_sizes[4], self.audio_ctx_dim, 0.2)
+        self.mid_block_half = MidBlock(layer_sizes[3], self.audio_ctx_dim, 0.1)
+        self.mid_block_bot = MidBlock(layer_sizes[4], self.audio_ctx_dim, 0.1)
 
         # Upsample блоки
         self.up_blocks = nn.ModuleList([
-            UpBlock(layer_sizes[4], layer_sizes[3], 0.3),
-            UpBlock(layer_sizes[3], layer_sizes[2], 0.3),
-            UpBlock(layer_sizes[2], layer_sizes[1], 0.3),
-            UpBlock(layer_sizes[1], layer_sizes[0], 0.3, True)
+            UpBlock(layer_sizes[4], layer_sizes[3], 0.1),
+            UpBlock(layer_sizes[3], layer_sizes[2], 0.1),
+            UpBlock(layer_sizes[2], layer_sizes[1], 0.1),
+            UpBlock(layer_sizes[1], layer_sizes[0], 0.1, True)
         ])
         
     def forward(self, x, t, audio_embed=None):
@@ -135,7 +135,7 @@ class UpBlock(nn.Module):
         self.drop1 = nn.Dropout2d(p_drop)
 
         if final:
-            self.final_act = torch.nn.Sigmoid()
+            self.final_act = nn.Tanh()
         else:
             self.final_act = F.silu
         

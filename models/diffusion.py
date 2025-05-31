@@ -96,7 +96,7 @@ class Diffusion(nn.Module):
         x = torch.randn((batch_size, 3, img_size, img_size), device=self.device)
 
         # Определение шагов для sampling
-        sequence = list(reversed(range(0, timesteps)))
+        sequence = list(reversed(range(0, self.timesteps, self.timesteps // timesteps)))
 
         for i in sequence:
             t = torch.full((batch_size,), i, device=self.device, dtype=torch.long)
@@ -106,12 +106,12 @@ class Diffusion(nn.Module):
                 # Условное предсказание (с аудио)
                 pred_noise_cond = model(x, t.float(), audio_embeds)
 
-                print("cond: ", toch.std(pred_noise_cond), torch.mean(pred_noise_cond))
+                print(f"cond: std={torch.std(pred_noise_cond).item()} mean={ torch.mean(pred_noise_cond).item()}")
 
                 # Безусловное предсказание (None вместо audio_embeds)
                 pred_noise_uncond = model(x, t.float(), None)
 
-                print("uncond: ", toch.std(pred_noise_uncond), torch.mean(pred_noise_uncond))
+                print(f"uncond: std={torch.std(pred_noise_uncond)} mean={torch.mean(pred_noise_uncond)}")
 
                 # Комбинирование через CFG
                 pred_noise = pred_noise_uncond + guidance_scale * (pred_noise_cond - pred_noise_uncond)

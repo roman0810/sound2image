@@ -15,3 +15,5 @@ nvidia-nccl-cu12==2.21.5
 nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvtx-cu12==12.4.127
 archisound==0.0.6
+psutil==7.0.0
+--upgrade --no-build-isolation flash-attn=2.7.4

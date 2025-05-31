@@ -177,7 +177,7 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "image_path": "data/images",
                           "sound_path": "data/sounds",
                           "lr": 0.0005,
-                          "BS": 80,
+                          "BS": 110,
                           "unconditional_prob": 0.08,
                           "timesteps": 1000,
                           "save_every": save_every,

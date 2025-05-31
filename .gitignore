@@ -4,3 +4,4 @@
 *.wav
 *.pth
 *.pt
+*.pyc
