@@ -14,7 +14,7 @@ class SoundDataset(Dataset):
         self.names = names
         self.im_path = image_path
         self.au_path = sound_path
-        self.stanart_len = 441000
+        self.stanart_len = 480000
 
     def __len__(self):
         return len(self.names)

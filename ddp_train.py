@@ -1,8 +1,7 @@
 from utils.config import ModelConfig
 from models.unet import UNetWithCrossAttention
 from models.diffusion import Diffusion
-from utils.SoundDataset import SoundDataset
-from models.AudioEncoder import AudioEncoder
+from utils.EmbedsDataset import EmbedsDataset
 
 import os
 import numpy as np
@@ -38,10 +37,6 @@ class Trainer:
                                     image_size=config.image_size,
                                     device=torch.device(f'cuda:{self.local_rank}'))
 
-        self.encode = AudioEncoder("facebook/wav2vec2-base-960h",
-                                    torch.device(f'cuda:{self.local_rank}'),
-                                    config.sample_rate)
-
         self.model = model.to(self.local_rank)
         self.train_data = train_data
         self.val_data = val_data
@@ -74,13 +69,11 @@ class Trainer:
         self.model.train()
 
         if torch.rand(1) < self.unconditional_prob:
-            audio_embeds = None
-        else:
-            audio_embeds = self.encode(source)
+            source = None
                 
 
         self.optimizer.zero_grad()
-        loss = self.diffusion.loss_fn(self.model, targets, audio_embeds)
+        loss = self.diffusion.loss_fn(self.model, targets, source)
         loss.backward()
         self.optimizer.step()
 
@@ -88,10 +81,8 @@ class Trainer:
 
     def _validate_batch(self, source, targets):
         self.model.eval()
-        with torch.no_grad():
-            audio_embeds = self.encode(source)
 
-            loss = self.diffusion.loss_fn(self.model, targets, audio_embeds)
+        loss = self.diffusion.loss_fn(self.model, targets, source)
         return loss.item()
 
     def _run_epoch(self, epoch):
@@ -147,7 +138,7 @@ class Trainer:
 
 def load_train_objs(config):
     # инициализация датасета
-    train_set = SoundDataset(config.image_path, config.sound_path)
+    train_set = EmbedsDataset(config.image_path, config.embed_path)
 
     # инициализация модели и ее оптимизатора
     model = UNetWithCrossAttention(config)
@@ -178,7 +169,7 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "sample_rate": 48000,
                           "audio_ctx_dim": 768,
                           "image_path": "data/images",
-                          "sound_path": "data/sounds",
+                          "embed_path": "data/embeds/sound_embeds.h5",
                           "lr": 0.0005,
                           "gamma": 0.95,
                           "BS": 110,
