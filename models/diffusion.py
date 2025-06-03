@@ -106,12 +106,12 @@ class Diffusion(nn.Module):
                 # Условное предсказание (с аудио)
                 pred_noise_cond = model(x, t.float(), audio_embeds)
 
-                print(f"cond: std={torch.std(pred_noise_cond).item()} mean={ torch.mean(pred_noise_cond).item()}")
+                # print(f"cond: std={torch.std(pred_noise_cond).item()} mean={ torch.mean(pred_noise_cond).item()}")
 
                 # Безусловное предсказание (None вместо audio_embeds)
                 pred_noise_uncond = model(x, t.float(), None)
 
-                print(f"uncond: std={torch.std(pred_noise_uncond)} mean={torch.mean(pred_noise_uncond)}")
+                # print(f"uncond: std={torch.std(pred_noise_uncond)} mean={torch.mean(pred_noise_uncond)}")
 
                 # Комбинирование через CFG
                 pred_noise = pred_noise_uncond + guidance_scale * (pred_noise_cond - pred_noise_uncond)

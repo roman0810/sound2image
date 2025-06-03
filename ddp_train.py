@@ -46,6 +46,7 @@ class Trainer:
         self.train_data = train_data
         self.val_data = val_data
         self.optimizer = optimizer
+        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config.gamma)
         self.unconditional_prob = config.unconditional_prob
         self.save_every = config.save_every
 
@@ -107,6 +108,8 @@ class Trainer:
             targets = targets.to(self.local_rank)
 
             train_epo_losses.append(self._train_batch(source, targets))
+
+        self.scheduler.step()
 
         for source, targets in self.val_data:
             source = source.to(self.local_rank)
@@ -177,6 +180,7 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "image_path": "data/images",
                           "sound_path": "data/sounds",
                           "lr": 0.0005,
+                          "gamma": 0.95,
                           "BS": 110,
                           "unconditional_prob": 0.08,
                           "timesteps": 1000,
