@@ -8,7 +8,7 @@ class UNetWithCrossAttention(nn.Module):
         self.image_size = config.image_size
         self.audio_ctx_dim = config.audio_ctx_dim  # d_audio из энкодера
 
-        layer_sizes = [3,32,64,128,256]
+        layer_sizes = [3,64,128,256,512]
         
         # Downsample блоки
         self.down_blocks = nn.ModuleList([

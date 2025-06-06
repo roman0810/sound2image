@@ -63,7 +63,12 @@ class Trainer:
         self.epochs_run = snapshot["EPOCHS_RUN"]
         self.train_losses = snapshot["TRAIN_LOSSES"]
         self.val_losses = snapshot["VAL_LOSSES"]
-        print(f'Resuming training from snapshot at epoch {self.epochs_run}')
+
+        LR = snapshot["LR"]
+        for g in self.optimizer.param_groups:
+            g["lr"] = LR
+
+        print(f'Resuming training from snapshot at epoch {self.epochs_run}; LR = {LR}')
 
     def _train_batch(self, source, targets):
         self.model.train()
@@ -119,6 +124,7 @@ class Trainer:
         snapshot["EPOCHS_RUN"] = epoch
         snapshot["TRAIN_LOSSES"] = self.train_losses
         snapshot["VAL_LOSSES"] = self.val_losses
+        snapshot["LR"] = self.scheduler.get_last_lr()[0]
 
         torch.save(snapshot, f"{name}.pt")
         print(f'Epoch {epoch} | Training snapshot saved at {name}.pt')
@@ -171,8 +177,8 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "image_path": "data/images",
                           "embed_path": "data/embeds/sound_embeds.h5",
                           "lr": 0.0005,
-                          "gamma": 0.95,
-                          "BS": 110,
+                          "gamma": 0.99,
+                          "BS": 180,
                           "unconditional_prob": 0.08,
                           "timesteps": 1000,
                           "save_every": save_every,
