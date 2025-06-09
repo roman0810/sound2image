@@ -178,8 +178,8 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "embed_path": "data/embeds/sound_embeds.h5",
                           "lr": 0.0005,
                           "gamma": 0.99,
-                          "BS": 180,
-                          "unconditional_prob": 0.08,
+                          "BS": 3,
+                          "unconditional_prob": 0.1,
                           "timesteps": 1000,
                           "save_every": save_every,
                           "snapshot_path": snapshot_path})

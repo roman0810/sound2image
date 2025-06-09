@@ -1,183 +1,205 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
+from torch.nn import functional as F
+from .attention import SelfAttention, CrossAttention
 
-class UNetWithCrossAttention(nn.Module):
-    def __init__(self, config):
+class TimeEmbedding(nn.Module):
+    def __init__(self, n_embd):
         super().__init__()
-        self.image_size = config.image_size
-        self.audio_ctx_dim = config.audio_ctx_dim  # d_audio из энкодера
+        self.linear_1 = nn.Linear(n_embd, 4 * n_embd)
+        self.linear_2 = nn.Linear(4 * n_embd, 4 * n_embd)
 
-        layer_sizes = [3,64,128,256,512]
-        
-        # Downsample блоки
-        self.down_blocks = nn.ModuleList([
-            DownBlock(layer_sizes[0], layer_sizes[1], 0.1),
-            DownBlock(layer_sizes[1], layer_sizes[2], 0.1),
-            DownBlock(layer_sizes[2], layer_sizes[3], 0.1),
-            DownBlock(layer_sizes[3], layer_sizes[4], 0.1)
+    def forward(self, x):
+        x = self.linear_1(x)
+        x = F.silu(x)
+        x = self.linear_2(x)
+        return x
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, n_time=1280):
+        super().__init__()
+        self.groupnorm_feature = nn.GroupNorm(32, in_channels)
+        self.conv_feature = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.linear_time = nn.Linear(n_time, out_channels)
+
+        self.groupnorm_merged = nn.GroupNorm(32, out_channels)
+        self.conv_merged = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+
+        if in_channels == out_channels:
+            self.residual_layer = nn.Identity()
+        else:
+            self.residual_layer = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0)
+
+    def forward(self, feature, time):
+        residue = feature
+
+        feature = self.groupnorm_feature(feature)
+        feature = F.silu(feature)
+        feature = self.conv_feature(feature)
+
+        time = F.silu(time)
+        time = self.linear_time(time)
+
+        merged = feature + time.unsqueeze(-1).unsqueeze(-1)
+        merged = self.groupnorm_merged(merged)
+        merged = F.silu(merged)
+        merged = self.conv_merged(merged)
+
+        return merged + self.residual_layer(residue)
+
+class AttentionBlock(nn.Module):
+    def __init__(self, n_head: int, n_embd: int, d_context=768, self_att=True):
+        super().__init__()
+        channels = n_head * n_embd
+
+        self.groupnorm = nn.GroupNorm(32, channels, eps=1e-6)
+        self.conv_input = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
+
+        if self_att:
+            self.layernorm_1 = nn.LayerNorm(channels)
+            self.attention_1 = SelfAttention(n_head, channels, in_proj_bias=False)
+            self.self_att = True
+        else:
+            self.self_att = False
+
+        self.layernorm_2 = nn.LayerNorm(channels)
+        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
+        self.layernorm_3 = nn.LayerNorm(channels)
+        self.linear_geglu_1  = nn.Linear(channels, 4 * channels * 2)
+        self.linear_geglu_2 = nn.Linear(4 * channels, channels)
+
+        self.conv_output = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
+
+    def forward(self, x, context):
+        residue_long = x
+
+        x = self.groupnorm(x)
+        x = self.conv_input(x)
+
+        n, c, h, w = x.shape
+        x = x.view((n, c, h * w))   # (n, c, hw)
+        x = x.transpose(-1, -2)  # (n, hw, c)
+
+        if self.self_att:
+            residue_short = x
+            x = self.layernorm_1(x)
+            x = self.attention_1(x)
+            x += residue_short
+
+        residue_short = x
+        x = self.layernorm_2(x)
+        x = self.attention_2(x, context)
+        x += residue_short
+
+        residue_short = x
+        x = self.layernorm_3(x)
+        x, gate = self.linear_geglu_1(x).chunk(2, dim=-1)
+        x = x * F.gelu(gate)
+        x = self.linear_geglu_2(x)
+        x += residue_short
+
+        x = x.transpose(-1, -2)  # (n, c, hw)
+        x = x.view((n, c, h, w))    # (n, c, h, w)
+
+        return self.conv_output(x) + residue_long
+
+class Upsample(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=2, mode='nearest')
+        return self.conv(x)
+
+class SwitchSequential(nn.Sequential):
+    def forward(self, x, context, time):
+        for layer in self:
+            if isinstance(layer, AttentionBlock):
+                x = layer(x, context)
+            elif isinstance(layer, ResidualBlock):
+                x = layer(x, time)
+            else:
+                x = layer(x)
+        return x
+
+class UNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoders = nn.ModuleList([
+            SwitchSequential(nn.Conv2d(3, 32, kernel_size=3, padding=1)),
+            SwitchSequential(ResidualBlock(32, 32), AttentionBlock(8, 4, self_att=False)),
+            SwitchSequential(ResidualBlock(32, 32), AttentionBlock(8, 4, self_att=False)),
+            SwitchSequential(nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1)),
+            SwitchSequential(ResidualBlock(32, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(ResidualBlock(64, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)),
+            SwitchSequential(ResidualBlock(64, 128), AttentionBlock(8, 16, self_att=True)),
+            SwitchSequential(ResidualBlock(128, 128), AttentionBlock(8, 16, self_att=True)),
+            SwitchSequential(nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)),
+            SwitchSequential(ResidualBlock(128, 128)),
+            SwitchSequential(ResidualBlock(128, 128)),
+        ])
+        self.bottleneck = SwitchSequential(
+            ResidualBlock(128, 128),
+            AttentionBlock(8, 16),
+            ResidualBlock(128, 128),
+        )
+        self.decoders = nn.ModuleList([
+            SwitchSequential(ResidualBlock(256, 128)),
+            SwitchSequential(ResidualBlock(256, 128)),
+            SwitchSequential(ResidualBlock(256, 128), Upsample(128)),
+            SwitchSequential(ResidualBlock(256, 128), AttentionBlock(8, 16, self_att=True)),
+            SwitchSequential(ResidualBlock(256, 128), AttentionBlock(8, 16, self_att=True)),
+            SwitchSequential(ResidualBlock(192, 128), AttentionBlock(8, 16, self_att=True), Upsample(128)),
+            SwitchSequential(ResidualBlock(192, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(ResidualBlock(128, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(ResidualBlock(96, 64), AttentionBlock(8, 8, self_att=True), Upsample(64)),
+            SwitchSequential(ResidualBlock(96, 32), AttentionBlock(8, 4, self_att=False)),
+            SwitchSequential(ResidualBlock(64, 32)),
+            SwitchSequential(ResidualBlock(64, 32)),
         ])
 
-        # Middle блок с Cross-Attention
-        # self.mid_block_top = MidBlock(64, self.audio_ctx_dim, 0.2)
-        self.mid_block_half = MidBlock(layer_sizes[3], self.audio_ctx_dim, 0.1)
-        self.mid_block_bot = MidBlock(layer_sizes[4], self.audio_ctx_dim, 0.1)
+    def forward(self, x, context, time):
+        skip_connections = []
+        for layers in self.encoders:
+            x = layers(x, context, time)
+            skip_connections.append(x)
 
-        # Upsample блоки
-        self.up_blocks = nn.ModuleList([
-            UpBlock(layer_sizes[4], layer_sizes[3], 0.1),
-            UpBlock(layer_sizes[3], layer_sizes[2], 0.1),
-            UpBlock(layer_sizes[2], layer_sizes[1], 0.1),
-            UpBlock(layer_sizes[1], layer_sizes[0], 0.1, True)
-        ])
-        
-    def forward(self, x, t, audio_embed=None):
-        """
-        Args:
-            x: Тензор изображения [batch, 3, h, w]
-            t: Тензор временных шагов [batch]
-            audio_embed: Аудио-эмбеддинги [batch, seq_len, d_audio]
-        Returns:
-            Тензор шума [batch, 3, h, w]
-        """
-        if audio_embed is None:
-            # Используйте нулевые эмбеддинги или пропустите Cross-Attention
-            audio_embed = torch.zeros(x.shape[0], 1, self.audio_ctx_dim).to(x.device)
+        x = self.bottleneck(x, context, time)
 
-        # Downsample path
-        skips = []
-        for block in self.down_blocks:
-            x = block(x, t)
-            skips.append(x)
-        
-        # Middle block
-        x = self.mid_block_bot(x, t, audio_embed)
-        # Готовим дополнительную CrossAttention обработку для последнего моста
-        skips[-2] = self.mid_block_half(skips[-2], t, audio_embed)
-
-        
-        # Upsample path
-        for block in self.up_blocks:
-            x = block(x, skips.pop(), t)
+        for layers in self.decoders:
+            x = torch.cat((x, skip_connections.pop()), dim=1)
+            x = layers(x, context, time)
 
         return x
 
 
-class DownBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, p_drop=0.3):
+class FinalLayer(nn.Module):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.BN1 = nn.BatchNorm2d(out_ch)
-        self.downsample = nn.Conv2d(out_ch, out_ch, 3, stride=2, padding=1)
-        self.time_embed = nn.Sequential(
-            nn.Linear(1, out_ch),
-            nn.SiLU(),
-            nn.Linear(out_ch, out_ch)
-        )
-        self.drop1 = nn.Dropout2d(p_drop)
-        
-    def forward(self, x, t):
-        h = F.silu(self.conv1(x))
-        h = h + self.time_embed(t[:, None])[:, :, None, None]
-        h = self.conv2(h)
-        h = self.BN1(h)
-        h = F.silu(h)
-        h = self.downsample(h)
-        h = self.drop1(h)
-        return h
+        self.groupnorm = nn.GroupNorm(32, in_channels)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
 
-
-class MidBlock(nn.Module):
-    """Средний блок с Cross-Attention"""
-    def __init__(self, dim, audio_ctx_dim, p_drop=0.2):
-        super().__init__()
-        self.conv1 = nn.Conv2d(dim, dim, 3, padding=1)
-        self.BN1 = nn.BatchNorm2d(dim)
-
-        # Cross-Attention
-        self.attn = CrossAttentionBlock(dim, audio_ctx_dim, dim)
-        
-        self.BN2 = nn.BatchNorm2d(dim)
-        self.conv2 = nn.Conv2d(dim, dim, 3, padding=1)
-        self.drop1 = nn.Dropout2d(p_drop)
-        
-    def forward(self, x, t, audio_embed):
-        B, C, H, W = x.shape
-        h = self.conv1(x)
-        h = self.BN1(h)
-        h = F.silu(h)
-        
-        # Применяем Cross-Attention
-        h_flat = h.view(B, C, H*W).permute(0, 2, 1)  # [B, H*W, C]
-        h_attn = self.attn(h_flat, audio_embed)      # [B, H*W, C]
-        h = h_attn.permute(0, 2, 1).view(B, C, H, W)
-        
-        h = self.BN2(h)
-        h = F.silu(self.conv2(h))
-        h = self.drop1(h)
-        #Зачем тут изначально стояло x + h????
-        return h
-
-
-class UpBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, p_drop=0.3, final=False):
-        super().__init__()
-        self.upsample = nn.ConvTranspose2d(in_ch*2, in_ch*2, 3, stride=2, padding=1)
-        self.conv1 = nn.Conv2d(in_ch*2, out_ch, 3, padding=1)
-        self.BN1 = nn.BatchNorm2d(out_ch)
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.time_embed = nn.Sequential(
-            nn.Linear(1, out_ch),
-            nn.SiLU(),
-            nn.Linear(out_ch, out_ch)
-        )
-        self.drop1 = nn.Dropout2d(p_drop)
-
-        if final:
-            self.final_act = nn.Tanh()
-        else:
-            self.final_act = F.silu
-        
-    def forward(self, x, skip, t):
-        x = torch.cat([x, skip], dim=1)
-        x = self.upsample(x, output_size=(-1, x.shape[-3], x.shape[-2]*2, x.shape[-1]*2))
+    def forward(self, x):
+        x = self.groupnorm(x)
         x = F.silu(x)
-        h = self.conv1(x)
-        h = self.BN1(h)
-        h = F.silu(h)
-        h = h + self.time_embed(t[:, None])[:, :, None, None]
-        h = self.drop1(h)
-        h = self.final_act(self.conv2(h))
+        x = self.conv(x)
+        return x
 
-        return h
-
-
-class CrossAttentionBlock(nn.Module):
-    def __init__(self, d_query, d_audio, d_out):
-        """
-        d_query - число каналов изображения
-        d_audio - латентня размерность фрагмента аудио
-        d_out   - число каналов в выходном изображении
-        """
+class UNetWithCrossAttention(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        self.W_Q = nn.Linear(d_query, d_out)
-        self.W_K = nn.Linear(d_audio, d_out)
-        self.W_V = nn.Linear(d_audio, d_out)
-        
-    def forward(self, x, audio_embed):
-        """
-        x - фичи изображения размера [batch, h,w, ch]
-        audio_embed - латентные представления всех токенов аудио размера [batch, seq_len, d_audio]
-        
-        Returns:
-            [batch, h*w, d_out] - обогащенные признаки
-        """
-        Q = self.W_Q(x)          # [B, h*w, d_out]
-        K = self.W_K(audio_embed) # [B, seq_len, d_out]
-        V = self.W_V(audio_embed) # [B, seq_len, d_out]
-        
-        # Scaled Dot-Product Attention
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / (K.shape[-1]**0.5)
-        attn = torch.softmax(scores, dim=-1)
-        return torch.matmul(attn, V)
+        self.time_embedding = TimeEmbedding(320)
+        self.unet = UNet()
+        self.final = FinalLayer(32, 3)
+        self.audio_ctx_dim = config.audio_ctx_dim
+
+    def forward(self, latent, time, context=None):
+        if context is None:
+            context = torch.zeros(latent.shape[0], 1, self.audio_ctx_dim).to(latent.device)
+
+        time = self.time_embedding(time)
+        output = self.unet(latent, context, time)
+        output = self.final(output)
+        return output

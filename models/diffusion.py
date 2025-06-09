@@ -104,12 +104,13 @@ class Diffusion(nn.Module):
             # Два предсказания: условное и безусловное
             with torch.no_grad():
                 # Условное предсказание (с аудио)
-                pred_noise_cond = model(x, t.float(), audio_embeds)
+                t_embed = self.get_time_embedding(t).to(self.device)
+                pred_noise_cond = model(x, t_embed, audio_embeds)
 
                 # print(f"cond: std={torch.std(pred_noise_cond).item()} mean={ torch.mean(pred_noise_cond).item()}")
 
                 # Безусловное предсказание (None вместо audio_embeds)
-                pred_noise_uncond = model(x, t.float(), None)
+                pred_noise_uncond = model(x, t_embed, None)
 
                 # print(f"uncond: std={torch.std(pred_noise_uncond)} mean={torch.mean(pred_noise_uncond)}")
 
@@ -179,9 +180,18 @@ class Diffusion(nn.Module):
         
         # Добавление шума
         noisy_images, noise = self.forward_process(x0, t)
+        t_embed = self.get_time_embedding(t).to(self.device)
         
         # Предсказание шума моделью
-        pred_noise = model(noisy_images, t.float(), audio_embeds)
+        pred_noise = model(noisy_images, t_embed, audio_embeds)
         
         # MSE между реальным и предсказанным шумом
         return F.mse_loss(pred_noise, noise)
+
+
+    def get_time_embedding(self, timestep, dtype=torch.float):
+        assert len(timestep.shape) == 1, "timestep должен быть одномерным тензором размером [batch_size]"
+
+        freqs = torch.pow(10000, -torch.arange(start=0, end=160, dtype=dtype) / 160).to(self.device)
+        x = timestep[:, None].to(dtype).to(self.device) * freqs[None, :]
+        return torch.cat([torch.cos(x), torch.sin(x)], dim=-1)
