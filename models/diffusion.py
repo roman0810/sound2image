@@ -34,6 +34,8 @@ class Diffusion(nn.Module):
         # Расчет параметров для q_posterior
         self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
 
+        self.intermediate_outputs = [None, None]
+
     def linear_beta_schedule(self, timesteps):
         scale = 1000 / timesteps
         beta_start = scale * 1e-4
@@ -187,6 +189,61 @@ class Diffusion(nn.Module):
         
         # MSE между реальным и предсказанным шумом
         return F.mse_loss(pred_noise, noise)
+
+    def self_perceptual_loss(self, model: nn.Module, x0: torch.Tensor, audio_embeds: torch.Tensor, t: torch.Tensor = None) -> torch.Tensor:
+        """
+        Расчет комбинированных потерь из MSE между настоящим и сгенерированным шумом и MSE между эмбедингами на шаге t и t+1
+
+        Args:
+            model: U-Net модель
+            x0: Исходные изображения [batch, 3, H, W]
+            audio_embeds: Аудио эмбеддинги [batch, seq_len, d_audio]
+            t: Временные шаги (если None - выбираются случайно)
+        Returns:
+            noise_loss
+            feature_loss
+        """
+        if t is None:
+            t = torch.randint(0, self.timesteps-1, (x0.shape[0],), device=self.device).long()
+
+        noisy_images, noise = self.forward_process(x0, t)
+        noisy_next, _ = self.forward_process(x0, t + 1)
+
+        t_embed = self.get_time_embedding(t).to(self.device)
+        t_embed_next = self.get_time_embedding(t + 1).to(self.device)
+
+        model.eval()
+        if type(model) == torch.nn.parallel.distributed.DistributedDataParallel:
+            model.module.unet.bottleneck[0].register_forward_hook(self.get_activation(0))
+            model.module.unet.bottleneck[2].register_forward_hook(self.get_activation(1))
+        else:
+            model.unet.bottleneck[0].register_forward_hook(self.get_activation(0))
+            model.unet.bottleneck[2].register_forward_hook(self.get_activation(1))
+
+        with torch.no_grad():
+            _ = model(noisy_next, t_embed_next, audio_embeds)
+
+            target_features = self.intermediate_outputs.copy()
+
+        model.train()
+        pred_noise = model(noisy_images, t_embed, audio_embeds)
+
+        loss = None
+        for output, target in zip(self.intermediate_outputs, target_features):
+            if loss is None:
+                loss = F.mse_loss(output, target)
+            else:
+                loss += F.mse_loss(output, target)
+
+        return F.mse_loss(pred_noise, noise), loss
+
+
+
+    def get_activation(self, index):
+        def hook(model, input, output):
+            self.intermediate_outputs[index] = output
+        return hook
+
 
 
     def get_time_embedding(self, timestep, dtype=torch.float):

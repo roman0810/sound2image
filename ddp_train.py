@@ -46,8 +46,11 @@ class Trainer:
         self.save_every = config.save_every
 
         self.epochs_run = 0
-        self.train_losses = []
+        self.train_noise_losses = []
+        self.train_feature_losses = []
         self.val_losses = []
+
+        self.perceptual_scale = 0.5
 
         if os.path.exists(config.snapshot_path):
             print("Loading snapshot")
@@ -61,7 +64,8 @@ class Trainer:
         snapshot = torch.load(snapshot_path)
         self.model.load_state_dict(snapshot["MODEL_STATE"])
         self.epochs_run = snapshot["EPOCHS_RUN"]
-        self.train_losses = snapshot["TRAIN_LOSSES"]
+        self.train_noise_losses = snapshot["TRAIN_NOISE_LOSSES"]
+        self.train_feature_losses = snapshot["TRAIN_FEATURE_LOSSES"]
         self.val_losses = snapshot["VAL_LOSSES"]
 
         LR = snapshot["LR"]
@@ -71,18 +75,17 @@ class Trainer:
         print(f'Resuming training from snapshot at epoch {self.epochs_run}; LR = {LR}')
 
     def _train_batch(self, source, targets):
-        self.model.train()
-
         if torch.rand(1) < self.unconditional_prob:
             source = None
                 
 
         self.optimizer.zero_grad()
-        loss = self.diffusion.loss_fn(self.model, targets, source)
+        noise_loss, feature_loss = self.diffusion.self_perceptual_loss(self.model, targets, source)
+        loss = self.perceptual_scale*feature_loss + noise_loss
         loss.backward()
         self.optimizer.step()
 
-        return loss.item()
+        return noise_loss.item(), feature_loss.item()*self.perceptual_scale
 
     def _validate_batch(self, source, targets):
         self.model.eval()
@@ -94,7 +97,8 @@ class Trainer:
         start_time = time.time()
         data_size = len(self.train_data)
 
-        train_epo_losses = []
+        train_epo_noise_losses = []
+        train_epo_feature_losses = []
         val_epo_losses = []
 
         # DataLoder не перемешивает данные, поэтому используем его 
@@ -103,7 +107,9 @@ class Trainer:
             source = source.to(self.local_rank)
             targets = targets.to(self.local_rank)
 
-            train_epo_losses.append(self._train_batch(source, targets))
+            noise_loss, feature_loss = self._train_batch(source, targets)
+            train_epo_noise_losses.append(noise_loss)
+            train_epo_feature_losses.append(feature_loss)
 
         self.scheduler.step()
 
@@ -113,7 +119,8 @@ class Trainer:
 
             val_epo_losses.append(self._validate_batch(source, targets))
 
-        self.train_losses.append(sum(train_epo_losses)/len(train_epo_losses))
+        self.train_noise_losses.append(sum(train_epo_noise_losses)/len(train_epo_noise_losses))
+        self.train_feature_losses.append(sum(train_epo_feature_losses)/len(train_epo_feature_losses))
         self.val_losses.append(sum(val_epo_losses)/len(val_epo_losses))
 
         print(f'GPU:{self.global_rank} | Epoch {epoch} | Time {int(time.time()-start_time)}')
@@ -122,7 +129,8 @@ class Trainer:
         snapshot = {}
         snapshot["MODEL_STATE"] = self.model.module.state_dict()
         snapshot["EPOCHS_RUN"] = epoch
-        snapshot["TRAIN_LOSSES"] = self.train_losses
+        snapshot["TRAIN_NOISE_LOSSES"] = self.train_noise_losses
+        snapshot["TRAIN_FEATURE_LOSSES"] = self.train_feature_losses
         snapshot["VAL_LOSSES"] = self.val_losses
         snapshot["LR"] = self.scheduler.get_last_lr()[0]
 
@@ -177,7 +185,7 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "image_path": "data/images",
                           "embed_path": "data/embeds/sound_embeds.h5",
                           "lr": 0.0005,
-                          "gamma": 0.99,
+                          "gamma": 0.98,
                           "BS": 3,
                           "unconditional_prob": 0.1,
                           "timesteps": 1000,

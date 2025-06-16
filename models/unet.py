@@ -127,37 +127,37 @@ class UNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoders = nn.ModuleList([
-            SwitchSequential(nn.Conv2d(3, 64, kernel_size=3, padding=1)),
-            SwitchSequential(ResidualBlock(64, 64), AttentionBlock(8, 8, self_att=False)),
-            SwitchSequential(ResidualBlock(64, 64), AttentionBlock(8, 8, self_att=False)),
+            SwitchSequential(nn.Conv2d(3, 32, kernel_size=3, padding=1)),
+            SwitchSequential(ResidualBlock(32, 32), AttentionBlock(8, 4, self_att=False)),
+            SwitchSequential(ResidualBlock(32, 32), AttentionBlock(8, 4, self_att=False)),
+            SwitchSequential(nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1)),
+            SwitchSequential(ResidualBlock(32, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(ResidualBlock(64, 64), AttentionBlock(8, 8, self_att=True)),
             SwitchSequential(nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)),
             SwitchSequential(ResidualBlock(64, 128), AttentionBlock(8, 16, self_att=True)),
             SwitchSequential(ResidualBlock(128, 128), AttentionBlock(8, 16, self_att=True)),
             SwitchSequential(nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)),
-            SwitchSequential(ResidualBlock(128, 256), AttentionBlock(8, 32, self_att=True)),
-            SwitchSequential(ResidualBlock(256, 256), AttentionBlock(8, 32, self_att=True)),
-            SwitchSequential(nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)),
-            SwitchSequential(ResidualBlock(256, 256)),
-            SwitchSequential(ResidualBlock(256, 256)),
+            SwitchSequential(ResidualBlock(128, 128)),
+            SwitchSequential(ResidualBlock(128, 128)),
         ])
         self.bottleneck = SwitchSequential(
-            ResidualBlock(256, 256),
-            AttentionBlock(8, 32),
-            ResidualBlock(256, 256),
+            ResidualBlock(128, 128),
+            AttentionBlock(8, 16),
+            ResidualBlock(128, 128),
         )
         self.decoders = nn.ModuleList([
-            SwitchSequential(ResidualBlock(512, 256)),
-            SwitchSequential(ResidualBlock(512, 256)),
-            SwitchSequential(ResidualBlock(512, 256), Upsample(256)),
-            SwitchSequential(ResidualBlock(512, 256), AttentionBlock(8, 32, self_att=True)),
-            SwitchSequential(ResidualBlock(512, 256), AttentionBlock(8, 32, self_att=True)),
-            SwitchSequential(ResidualBlock(384, 256), AttentionBlock(8, 32, self_att=True), Upsample(256)),
-            SwitchSequential(ResidualBlock(384, 128), AttentionBlock(8, 16, self_att=True)),
+            SwitchSequential(ResidualBlock(256, 128)),
+            SwitchSequential(ResidualBlock(256, 128)),
+            SwitchSequential(ResidualBlock(256, 128), Upsample(128)),
+            SwitchSequential(ResidualBlock(256, 128), AttentionBlock(8, 16, self_att=True)),
             SwitchSequential(ResidualBlock(256, 128), AttentionBlock(8, 16, self_att=True)),
             SwitchSequential(ResidualBlock(192, 128), AttentionBlock(8, 16, self_att=True), Upsample(128)),
-            SwitchSequential(ResidualBlock(192, 64), AttentionBlock(8, 8, self_att=False)),
-            SwitchSequential(ResidualBlock(128, 64)),
-            SwitchSequential(ResidualBlock(128, 64)),
+            SwitchSequential(ResidualBlock(192, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(ResidualBlock(128, 64), AttentionBlock(8, 8, self_att=True)),
+            SwitchSequential(ResidualBlock(96, 64), AttentionBlock(8, 8, self_att=True), Upsample(64)),
+            SwitchSequential(ResidualBlock(96, 32), AttentionBlock(8, 4, self_att=False)),
+            SwitchSequential(ResidualBlock(64, 32)),
+            SwitchSequential(ResidualBlock(64, 32)),
         ])
 
     def forward(self, x, context, time):
@@ -192,7 +192,7 @@ class UNetWithCrossAttention(nn.Module):
         super().__init__()
         self.time_embedding = TimeEmbedding(320)
         self.unet = UNet()
-        self.final = FinalLayer(64, 3)
+        self.final = FinalLayer(32, 3)
         self.audio_ctx_dim = config.audio_ctx_dim
 
     def forward(self, latent, time, context=None):
