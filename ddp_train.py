@@ -50,7 +50,7 @@ class Trainer:
         self.train_feature_losses = []
         self.val_losses = []
 
-        self.perceptual_scale = 0.5
+        self.perceptual_scale = 0.05
 
         if os.path.exists(config.snapshot_path):
             print("Loading snapshot")
