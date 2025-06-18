@@ -35,6 +35,7 @@ class Diffusion(nn.Module):
         self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
 
         self.intermediate_outputs = [None, None]
+        self.cos_sim = torch.nn.CosineSimilarity(dim=1)
 
     def linear_beta_schedule(self, timesteps):
         scale = 1000 / timesteps
@@ -231,9 +232,9 @@ class Diffusion(nn.Module):
         loss = None
         for output, target in zip(self.intermediate_outputs, target_features):
             if loss is None:
-                loss = F.mse_loss(output, target)
+                loss = self.cos_sim(output, target).mean()
             else:
-                loss += F.mse_loss(output, target)
+                loss += self.cos_sim(output, target).mean()
 
         return F.mse_loss(pred_noise, noise), loss
 
