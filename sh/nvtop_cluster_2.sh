@@ -1,0 +1,50 @@
+if tmux has-session -t NV_MONITOR 2>/dev/null; then
+    # Если существует — убиваем её
+    tmux kill-session -t NV_MONITOR
+fi
+
+
+tmux has-session -t development
+
+if [ $? != 0  ]; then
+    tmux new-session -s NV_MONITOR -n Desktop -d
+
+    # Set up main NV_MONITOR window
+    tmux select-window -t NV_MONITOR:Desktop
+
+
+    # Create splits (must executed outside of the session)
+    tmux new-window -t NV_MONITOR:Desktop
+    tmux split-window -v -t NV_MONITOR
+    tmux split-window -v -t NV_MONITOR
+    tmux split-window -v -t NV_MONITOR
+
+    tmux select-layout -t NV_MONITOR:Desktop even-vertical
+
+
+    # Подготовка master-node
+    tmux select-pane -t 0
+    tmux send-keys -t NV_MONITOR:Desktop.0 'ssh usr5@10.162.1.91' C-m
+    tmux send-keys -t NV_MONITOR:Desktop.0 'nvtop' C-m
+
+    # Первое SSH-подключение и выполнение команд
+    tmux select-pane -t 1
+
+    tmux send-keys -t NV_MONITOR:Desktop.1 'ssh usr6@10.162.1.92' C-m
+    tmux send-keys -t NV_MONITOR:Desktop.1 'nvtop' C-m
+
+    # Второе SSH-подключение и выполнение команд
+    tmux select-pane -t 2
+
+    tmux send-keys -t NV_MONITOR:Desktop.2 'ssh usr7@10.162.1.93' C-m
+    tmux send-keys -t NV_MONITOR:Desktop.2 'nvtop' C-m
+
+    # Третье SSH-подключение и выполнение команд
+    tmux select-pane -t 3
+
+    tmux send-keys -t NV_MONITOR:Desktop.3 'ssh usr8@10.162.1.94' C-m
+    tmux send-keys -t NV_MONITOR:Desktop.3 'nvtop' C-m
+
+fi
+# Присоединяемся к сессии
+tmux attach -t NV_MONITOR
