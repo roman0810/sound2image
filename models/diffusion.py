@@ -109,13 +109,10 @@ class Diffusion(nn.Module):
                 # Условное предсказание (с аудио)
                 t_embed = self.get_time_embedding(t).to(self.device)
                 pred_noise_cond = model(x, t_embed, audio_embeds)
-
-                # print(f"cond: std={torch.std(pred_noise_cond).item()} mean={ torch.mean(pred_noise_cond).item()}")
+                # pred_noise = pred_noise_cond
 
                 # Безусловное предсказание (None вместо audio_embeds)
                 pred_noise_uncond = model(x, t_embed, None)
-
-                # print(f"uncond: std={torch.std(pred_noise_uncond)} mean={torch.mean(pred_noise_uncond)}")
 
                 # Комбинирование через CFG
                 pred_noise = pred_noise_uncond + guidance_scale * (pred_noise_cond - pred_noise_uncond)
@@ -164,7 +161,7 @@ class Diffusion(nn.Module):
             noise = torch.zeros_like(x)
         
         x = torch.sqrt(alpha_cumprod_t_prev) * pred_x0 + direction + sigma_t * noise
-        return x
+        return x.clamp(-1.0, 1.0)
 
     def loss_fn(self, model: nn.Module, x0: torch.Tensor, audio_embeds: torch.Tensor, t: torch.Tensor = None) -> torch.Tensor:
         """
@@ -236,7 +233,7 @@ class Diffusion(nn.Module):
             else:
                 loss += self.cos_sim(output, target).mean()
 
-        return F.mse_loss(pred_noise, noise), loss
+        return F.l1_loss(pred_noise, noise), loss
 
 
 

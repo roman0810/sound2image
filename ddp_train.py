@@ -156,7 +156,7 @@ def load_train_objs(config):
 
     # инициализация модели и ее оптимизатора
     model = UNetWithCrossAttention(config)
-    optimizer = torch.optim.Adam(model.parameters(), lr = config.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr = config.lr)
     return train_set, model, optimizer
 
 def prepare_dataloader(dataset: Dataset, batch_size: int, num_workers: int=8):
