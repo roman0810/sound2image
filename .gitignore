@@ -6,3 +6,5 @@
 *.pt
 *.pyc
 *.h5
+gpu_monitor/passwords
+*.csv
