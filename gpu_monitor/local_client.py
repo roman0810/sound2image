@@ -7,7 +7,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.live import Live
 from rich.progress import BarColumn
-import pickle
 
 from io import StringIO
 import csv
@@ -37,7 +36,7 @@ class Connection:
         self.stdin, self.stdout, self.stderr = self.ssh.exec_command("python3 remote_gpu_monitor_simple_csv.py")
 
 class Monitor:
-    def __init__(self, logging=True):
+    def __init__(self, logging=True, condition = None):
         self.connections = []
         self.console = Console()
         self.load_history = {}
@@ -46,6 +45,12 @@ class Monitor:
         self.last_log_time = 0
         self.log_file = None
         self.csv_writer = None
+
+        if condition:
+            self.conditional_monitoring = True
+            self.condition = condition
+        else:
+            self.conditional_monitoring = False
 
     def add_connection(self, connection):
         self.connections.append(connection)
@@ -77,7 +82,7 @@ class Monitor:
         table.add_column("Memory Usage")
         table.add_column("Load Graph", justify="left")
 
-        BAR_LENGTH = 20  # длина ASCII-бара
+        BAR_LENGTH = 20
         HISTORY_LENGTH = 20
         graph_chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
 
@@ -167,12 +172,18 @@ class Monitor:
                             self.write_log(gpus)
                             self.last_log_time = time.time()
 
+                    if self.conditional_monitoring:
+                        self.condition(gpus)
+
+
         except KeyboardInterrupt:
             self.console.print("[yellow]Stopping monitor...[/yellow]")
             for con in self.connections:
                 con.ssh.close()
 
 if __name__ == "__main__":
+    import pickle
+
     hosts = ["10.162.1.50", "10.162.1.82", "10.162.1.71", "10.162.1.51",
      "10.162.1.91", "10.162.1.92", "10.162.1.93", "10.162.1.94"]
 

@@ -37,6 +37,7 @@ if [ $? != 0  ]; then
     tmux send-keys -t Editor:Desktop.0 'cd ~/Documents/GitHub/sound2image' C-m
     tmux send-keys -t Editor:Desktop.0 'source ~/myenv/bin/activate' C-m
     tmux send-keys -t Editor:Desktop.0 'export NCCL_SOCKET_IFNAME=eno1' C-m
+    tmux send-keys -t Editor:Desktop.0 'clear' C-m
 
     # Первое SSH-подключение и выполнение команд
     tmux select-pane -t 1
@@ -44,6 +45,7 @@ if [ $? != 0  ]; then
     tmux send-keys -t Editor:Desktop.1 'ssh usr2@10.162.1.82' C-m
     tmux send-keys -t Editor:Desktop.1 'cd ~/Documents/GitHub/sound2image' C-m
     tmux send-keys -t Editor:Desktop.1 'export NCCL_SOCKET_IFNAME=eno1' C-m
+    tmux send-keys -t Editor:Desktop.1 'clear' C-m
 
     # Второе SSH-подключение и выполнение команд
     tmux select-pane -t 2
@@ -52,6 +54,7 @@ if [ $? != 0  ]; then
     tmux send-keys -t Editor:Desktop.2 'cd ~/Documents/GitHub/sound2image' C-m
     tmux send-keys -t Editor:Desktop.2 'source ~/myenv/bin/activate' C-m
     tmux send-keys -t Editor:Desktop.2 'export NCCL_SOCKET_IFNAME=eno1' C-m
+    tmux send-keys -t Editor:Desktop.2 'clear' C-m
 
     # Третье SSH-подключение и выполнение команд
     tmux select-pane -t 3
@@ -61,6 +64,7 @@ if [ $? != 0  ]; then
     tmux send-keys -t Editor:Desktop.3 'conda deactivate' C-m
     tmux send-keys -t Editor:Desktop.3 'source ~/myenv/bin/activate' C-m
     tmux send-keys -t Editor:Desktop.3 'export NCCL_SOCKET_IFNAME=eno1' C-m
+    tmux send-keys -t Editor:Desktop.3 'clear' C-m
 
 fi
 # Присоединяемся к сессии
