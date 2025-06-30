@@ -23,7 +23,7 @@ class Connection:
         self.stderr = None
         self.console = Console()
 
-    def connect(self):
+    def connect(self, command = "python3 remote_gpu_monitor_simple_csv.py"):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(
@@ -33,7 +33,11 @@ class Connection:
             key_filename=self.key_filename
         )
         # Запуск удалённого скрипта
-        self.stdin, self.stdout, self.stderr = self.ssh.exec_command("python3 remote_gpu_monitor_simple_csv.py")
+        self.stdin, self.stdout, self.stderr = self.ssh.exec_command(command)
+
+        if command[:4] == "sudo":
+            self.stdin.write(f"{self.password}\n")
+            self.stdin.flush()
 
 class Monitor:
     def __init__(self, logging=True, condition = None):
@@ -173,7 +177,11 @@ class Monitor:
                             self.last_log_time = time.time()
 
                     if self.conditional_monitoring:
-                        self.condition(gpus)
+                        command = self.condition(gpus)
+                        if command:
+                            for con in self.connections:
+                                con.connect(command)
+                                print(con.stderr.readline())
 
 
         except KeyboardInterrupt:
@@ -184,16 +192,25 @@ class Monitor:
 if __name__ == "__main__":
     import pickle
 
+    def condition(gpus):
+        for node in gpus:
+            for gpu in node:
+                if int(gpu['temperature']) > 90:
+                    return "sudo -S shutdown"
+        return None
+
+
     hosts = ["10.162.1.50", "10.162.1.82", "10.162.1.71", "10.162.1.51",
      "10.162.1.91", "10.162.1.92", "10.162.1.93", "10.162.1.94"]
 
-    users = ["usr", "usr2", "usr3", "usr4", "usr5", "usr6", "usr7", "usr8"]
+    users = ["usr","usr2", "usr3", "usr4",
+             "usr5", "usr6", "usr7", "usr8"]
 
     with open(os.path.dirname(os.path.abspath(__file__))+"/passwords", "rb") as fp:
         passwords = pickle.load(fp)
 
 
-    monitor = Monitor(logging = False)
+    monitor = Monitor(logging = False, condition = condition)
 
     for host, user, password in zip(hosts, users, passwords):
         con = Connection(

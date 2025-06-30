@@ -12,10 +12,11 @@ from torch.utils.data import DataLoader, Dataset
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
+# from torch.distributed import init_process_group, destroy_process_group
+import torch.distributed as dist
 
 def ddp_setup():
-    init_process_group(backend='nccl',
+    dist.init_process_group(backend='nccl',
                        init_method='env://')
 
 # Внедрить сюда обучение через прослойку класса Diffusion
@@ -50,7 +51,9 @@ class Trainer:
         self.train_feature_losses = []
         self.val_losses = []
 
-        self.perceptual_scale = 0.2
+        self.perceptual_gamma = torch.tensor(0.985, device=torch.device(f'cuda:{self.local_rank}'))
+        self.perceptual_scale = torch.tensor(0.2, device=torch.device(f'cuda:{self.local_rank}'))
+        self.difference = 2.5
 
         if os.path.exists(config.snapshot_path):
             print("Loading snapshot")
@@ -67,12 +70,14 @@ class Trainer:
         self.train_noise_losses = snapshot["TRAIN_NOISE_LOSSES"]
         self.train_feature_losses = snapshot["TRAIN_FEATURE_LOSSES"]
         self.val_losses = snapshot["VAL_LOSSES"]
+        self.perceptual_scale = torch.tensor(snapshot["SP_SCALE"], device=torch.device(f'cuda:{self.local_rank}'))
 
         LR = snapshot["LR"]
         for g in self.optimizer.param_groups:
             g["lr"] = LR
 
         print(f'Resuming training from snapshot at epoch {self.epochs_run}; LR = {LR}')
+
 
     def _train_batch(self, source, targets):
         if torch.rand(1) < self.unconditional_prob:
@@ -81,6 +86,11 @@ class Trainer:
 
         self.optimizer.zero_grad()
         noise_loss, feature_loss = self.diffusion.self_perceptual_loss(self.model, targets, source)
+
+        # балансировка noise и self_perceptual потерь
+        if (self.perceptual_scale*feature_loss*self.difference > noise_loss).item():
+            self.perceptual_scale = self.perceptual_scale * self.perceptual_gamma
+
         loss = self.perceptual_scale*feature_loss + noise_loss
         loss.backward()
         self.optimizer.step()
@@ -133,6 +143,7 @@ class Trainer:
         snapshot["TRAIN_FEATURE_LOSSES"] = self.train_feature_losses
         snapshot["VAL_LOSSES"] = self.val_losses
         snapshot["LR"] = self.scheduler.get_last_lr()[0]
+        snapshot["SP_SCALE"] = self.perceptual_scale.item()
 
         torch.save(snapshot, f"{name}.pt")
         print(f'Epoch {epoch} | Training snapshot saved at {name}.pt')
@@ -202,7 +213,7 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
     trainer = Trainer(model, train_loader, val_loader, optimizer, config)
 
     trainer.train(total_epochs)
-    destroy_process_group()
+    dist.destroy_process_group()
 
 if __name__ == "__main__":
     import argparse
