@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader, Dataset
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-# from torch.distributed import init_process_group, destroy_process_group
 import torch.distributed as dist
 
 def ddp_setup():
@@ -44,6 +43,7 @@ class Trainer:
         self.optimizer = optimizer
         self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config.gamma)
         self.unconditional_prob = config.unconditional_prob
+        self.unconditional_gamma = 0.53
         self.save_every = config.save_every
 
         self.epochs_run = 0
@@ -71,6 +71,7 @@ class Trainer:
         self.train_feature_losses = snapshot["TRAIN_FEATURE_LOSSES"]
         self.val_losses = snapshot["VAL_LOSSES"]
         self.perceptual_scale = torch.tensor(snapshot["SP_SCALE"], device=torch.device(f'cuda:{self.local_rank}'))
+        self.unconditional_prob = snapshot["UNCD_PROB"]
 
         LR = snapshot["LR"]
         for g in self.optimizer.param_groups:
@@ -95,7 +96,7 @@ class Trainer:
         loss.backward()
         self.optimizer.step()
 
-        return noise_loss.item(), feature_loss.item()*self.perceptual_scale
+        return noise_loss.item(), feature_loss.item()*self.perceptual_scale.item()
 
     def _validate_batch(self, source, targets):
         self.model.eval()
@@ -122,6 +123,7 @@ class Trainer:
             train_epo_feature_losses.append(feature_loss)
 
         self.scheduler.step()
+        self.unconditional_prob *= self.unconditional_gamma
 
         for source, targets in self.val_data:
             source = source.to(self.local_rank)
@@ -144,6 +146,7 @@ class Trainer:
         snapshot["VAL_LOSSES"] = self.val_losses
         snapshot["LR"] = self.scheduler.get_last_lr()[0]
         snapshot["SP_SCALE"] = self.perceptual_scale.item()
+        snapshot["UNCD_PROB"] = self.unconditional_prob
 
         torch.save(snapshot, f"{name}.pt")
         print(f'Epoch {epoch} | Training snapshot saved at {name}.pt')
@@ -198,7 +201,7 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "lr": 0.0005,
                           "gamma": 0.98,
                           "BS": 3,
-                          "unconditional_prob": 0.1,
+                          "unconditional_prob": 0.7,
                           "timesteps": 1000,
                           "save_every": save_every,
                           "snapshot_path": snapshot_path})
