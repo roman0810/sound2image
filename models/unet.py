@@ -126,6 +126,8 @@ class SwitchSequential(nn.Sequential):
 class UNet(nn.Module):
     def __init__(self):
         super().__init__()
+        self.GPUs = ["cuda:2", "cuda:3", "cuda:4"]
+
         self.encoders = nn.ModuleList([
             SwitchSequential(nn.Conv2d(3, 32, kernel_size=3, padding=1)),
             SwitchSequential(ResidualBlock(32, 32), AttentionBlock(8, 4, self_att=False)),
@@ -139,12 +141,14 @@ class UNet(nn.Module):
             SwitchSequential(nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)),
             SwitchSequential(ResidualBlock(128, 128)),
             SwitchSequential(ResidualBlock(128, 128)),
-        ])
+        ]).to(self.GPUs[0])
+
         self.bottleneck = SwitchSequential(
             ResidualBlock(128, 128),
             AttentionBlock(8, 16),
             ResidualBlock(128, 128),
-        )
+        ).to(self.GPUs[1])
+
         self.decoders = nn.ModuleList([
             SwitchSequential(ResidualBlock(256, 128)),
             SwitchSequential(ResidualBlock(256, 128)),
@@ -158,19 +162,19 @@ class UNet(nn.Module):
             SwitchSequential(ResidualBlock(96, 32), AttentionBlock(8, 4, self_att=False)),
             SwitchSequential(ResidualBlock(64, 32)),
             SwitchSequential(ResidualBlock(64, 32)),
-        ])
+        ]).to(self.GPUs[2])
 
     def forward(self, x, context, time):
         skip_connections = []
         for layers in self.encoders:
-            x = layers(x, context, time)
-            skip_connections.append(x)
+            x = layers(x.to(self.GPUs[0]), context.to(self.GPUs[0]), time.to(self.GPUs[0]))
+            skip_connections.append(x.to(self.GPUs[2]))
 
-        x = self.bottleneck(x, context, time)
+        x = self.bottleneck(x.to(self.GPUs[1]), context.to(self.GPUs[1]), time.to(self.GPUs[1]))
 
         for layers in self.decoders:
-            x = torch.cat((x, skip_connections.pop()), dim=1)
-            x = layers(x, context, time)
+            x = torch.cat((x.to(self.GPUs[2]), skip_connections.pop()), dim=1)
+            x = layers(x, context.to(self.GPUs[2]), time.to(self.GPUs[2]))
 
         return x
 
@@ -190,16 +194,16 @@ class FinalLayer(nn.Module):
 class UNetWithCrossAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.time_embedding = TimeEmbedding(320)
+        self.time_embedding = TimeEmbedding(320).to("cuda:1")
         self.unet = UNet()
-        self.final = FinalLayer(32, 3)
+        self.final = FinalLayer(32, 3).to("cuda:5")
         self.audio_ctx_dim = config.audio_ctx_dim
 
     def forward(self, latent, time, context=None):
         if context is None:
             context = torch.zeros(latent.shape[0], 1, self.audio_ctx_dim).to(latent.device)
 
-        time = self.time_embedding(time)
+        time = self.time_embedding(time.to("cuda:1"))
         output = self.unet(latent, context, time)
-        output = self.final(output)
+        output = self.final(output.to("cuda:5"))
         return output
