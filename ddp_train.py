@@ -19,8 +19,7 @@ def ddp_setup():
     dist.init_process_group(backend='nccl',
                        init_method='env://')
 
-# Внедрить сюда обучение через прослойку класса Diffusion
-# work in progres...
+
 class Trainer:
     def __init__(self,
         model: torch.nn.Module,
