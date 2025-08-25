@@ -12,7 +12,7 @@ def clean_output(output):
 def get_gpu_csv_line():
     cmd = [
         'nvidia-smi',
-        '--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,fan.speed',
+        '--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw',
         '--format=csv,noheader,nounits'
     ]
     try:
@@ -29,6 +29,5 @@ if __name__ == "__main__":
     while True:
         csv_data = get_gpu_csv_line()
         if csv_data:
-            for line in csv_data.strip().split('\n'):
-                print(line.strip(), flush=True)
+            print(csv_data.strip(), flush=True)
         time.sleep(1)

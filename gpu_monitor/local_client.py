@@ -23,7 +23,7 @@ class Connection:
         self.stderr = None
         self.console = Console()
 
-    def connect(self, command = "python3 remote_gpu_monitor_simple_csv.py"):
+    def connect(self, command = "python3 /raid/rezaian_n/sound2image/gpu_monitor/remote_gpu_monitor_simple_csv.py"):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(
@@ -67,10 +67,9 @@ class Monitor:
             f = StringIO(line.strip())
             reader = csv.DictReader(
                 f,
-                fieldnames=["index", "name", "temperature", "load", "mem_used", "mem_total", "power", "fan"]
+                fieldnames=["index", "name", "temperature", "load", "mem_used", "mem_total", "power"]
             )
-            gpu = list(reader)
-            gpus.append(gpu)
+            gpus = list(reader)
 
         return gpus
 
@@ -81,7 +80,6 @@ class Monitor:
         table.add_column("Name")
         table.add_column("Temp (°C)")
         table.add_column("Load (%)")
-        table.add_column("Fan (%)")
         table.add_column("Power (W)")
         table.add_column("Memory Usage")
         table.add_column("Load Graph", justify="left")
@@ -92,12 +90,11 @@ class Monitor:
 
         for i, con in enumerate(self.connections):
             node = con.user
-            for gpu in gpus[i]:
+            for gpu in gpus:
                 index = gpu['index']
                 name = gpu['name']
                 temp = f"{gpu['temperature']}°C"
                 load = f"{gpu['load']}%"
-                fan_speed = f"{int(gpu['fan'])}%"
                 power = f"{float(gpu['power']):.1f} W"
 
                 if int(gpu['temperature']) > 75:
@@ -122,7 +119,7 @@ class Monitor:
 
 
                 mem_str = f"{(mem_used/1024.0):.1f}/{(mem_total/1024.0):.1f} GB"
-                table.add_row(node, index, name, temp, load, fan_speed, power, f"{mem_str} [{bar}]", load_graph)
+                table.add_row(node, index, name, temp, load, power, f"{mem_str} [{bar}]", load_graph)
 
         return table
 
@@ -136,7 +133,7 @@ class Monitor:
         self.log_file = open(log_filename, mode='w', newline='', encoding='utf-8')
         self.csv_writer = csv.DictWriter(self.log_file, fieldnames=[
             'timestamp', 'node', 'gpu_index', 'temperature', 'load',
-            'fan_speed', 'power', 'mem_used'
+            'power', 'mem_used'
         ])
         self.csv_writer.writeheader()
 
@@ -151,7 +148,6 @@ class Monitor:
                     'gpu_index': gpu['index'],
                     'temperature': int(gpu['temperature']),
                     'load': int(gpu['load']),
-                    'fan_speed': int(gpu['fan']),
                     'power': float(gpu['power']),
                     'mem_used': int(float(gpu['mem_used']))
                 })
@@ -167,8 +163,11 @@ class Monitor:
             with Live(refresh_per_second=1) as live:
                 headers = self.get_gpus()
                 while True:
-                    gpus = self.get_gpus()
-                    live.update(self.build_table(gpus))
+                    GPUS = []
+                    for i in range(8):
+                        gpus = self.get_gpus()
+                        GPUS.append(gpus[0])
+                    live.update(self.build_table(GPUS))
 
                     if self.logging:
                         now = time.time()
@@ -190,27 +189,14 @@ class Monitor:
                 con.ssh.close()
 
 if __name__ == "__main__":
-    import pickle
 
-    def condition(gpus):
-        for node in gpus:
-            for gpu in node:
-                if int(gpu['temperature']) > 90:
-                    return "sudo -S shutdown"
-        return None
+    hosts = ["127.0.0.1"]
 
+    users = ["rezaian-n"]
 
-    hosts = ["10.162.1.50", "10.162.1.82", "10.162.1.71", "10.162.1.51",
-     "10.162.1.91", "10.162.1.92", "10.162.1.93", "10.162.1.94"]
+    passwords = [""]
 
-    users = ["usr","usr2", "usr3", "usr4",
-             "usr5", "usr6", "usr7", "usr8"]
-
-    with open(os.path.dirname(os.path.abspath(__file__))+"/passwords", "rb") as fp:
-        passwords = pickle.load(fp)
-
-
-    monitor = Monitor(logging = False, condition = condition)
+    monitor = Monitor(logging = False)
 
     for host, user, password in zip(hosts, users, passwords):
         con = Connection(
