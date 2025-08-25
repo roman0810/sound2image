@@ -119,9 +119,18 @@ class SwitchSequential(nn.Sequential):
                 x = layer(x, context)
             elif isinstance(layer, ResidualBlock):
                 x = layer(x, time)
+            # обработка случаев c FSDP оберткой
+            elif isinstance(layer, torch.distributed.fsdp.fully_sharded_data_parallel.FullyShardedDataParallel):
+                if isinstance(layer.module, AttentionBlock):
+                    x = layer(x, context)
+                elif isinstance(layer.module, ResidualBlock):
+                    x = layer(x, time)
+                else:
+                    raise TypeError("unknown type of module")
             else:
                 x = layer(x)
         return x
+
 
 class UNet(nn.Module):
     def __init__(self):
