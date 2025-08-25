@@ -185,7 +185,7 @@ class FSDP_Trainer:
         loss = self.perceptual_scale*feature_loss + noise_loss
 
         self.scaler.scale(loss).backward()
-        self.scaler.step(optimizer)
+        self.scaler.step(self.optimizer)
         self.scaler.update()
 
         return noise_loss, feature_loss*self.perceptual_scale
