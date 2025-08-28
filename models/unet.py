@@ -126,7 +126,8 @@ class SwitchSequential(nn.Sequential):
                 elif isinstance(layer.module, ResidualBlock):
                     x = layer(x, time)
                 else:
-                    raise TypeError("unknown type of module")
+                    # ВНИМАНИЕ! Возможен конфликт подаваемых аргументов при новых типах
+                    x = layer(x)
             else:
                 x = layer(x)
         return x

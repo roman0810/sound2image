@@ -44,6 +44,7 @@ if [ $? != 0  ]; then
 
     tmux send-keys -t Editor:Desktop.1 'ssh usr2@10.162.1.82' C-m
     tmux send-keys -t Editor:Desktop.1 'cd ~/Documents/GitHub/sound2image' C-m
+    tmux send-keys -t Editor:Desktop.1 'source ~/myenv/bin/activate' C-m
     tmux send-keys -t Editor:Desktop.1 'export NCCL_SOCKET_IFNAME=eno1' C-m
     tmux send-keys -t Editor:Desktop.1 'clear' C-m
 

@@ -25,7 +25,7 @@ class FSDP_Trainer:
         val_data: EmbedsDataset,
         config: ModelConfig):
 
-        local_rank = int(os.environ["LOCAL_RANK"])
+        self.local_rank = int(os.environ["LOCAL_RANK"])
         self.rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
 
@@ -34,7 +34,7 @@ class FSDP_Trainer:
 
         init_process_group(backend="nccl")
 
-        torch.cuda.set_device(self.rank)
+        torch.cuda.set_device(self.local_rank)
 
         # --- data ---
         self.train_data = DataLoader(
@@ -70,12 +70,12 @@ class FSDP_Trainer:
         self.difference = 2.5
 
         # --- model ---
-        self.model = model.to(self.rank)
+        self.model = model.to(self.local_rank)
 
         if os.path.exists(config.snapshot_path):
             LR = self._load_snapshot(config.snapshot_path)
         else:
-            print(f'GPU[{self.rank}]: Snapshot path {config.snapshot_path} does not exist')
+            print(f'GPU[{self.local_rank}]: Snapshot path {config.snapshot_path} does not exist')
             LR = config.lr
 
         def fsdp_auto_wrap_policy(module, recurse, nonwrapped_numel):
@@ -90,13 +90,13 @@ class FSDP_Trainer:
                 buffer_dtype=torch.bfloat16,
             ),
             sharding_strategy=torch.distributed.fsdp.ShardingStrategy.FULL_SHARD,
-            device_id=self.rank,
+            device_id=self.local_rank,
             use_orig_params=True,
         )
         self.diffusion = Diffusion(
             timesteps=config.timesteps,
             image_size=config.image_size,
-            device=torch.device(f'cuda:{self.rank}')
+            device=torch.device(f'cuda:{self.local_rank}')
         )
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr = LR)
         self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config.gamma)
@@ -114,7 +114,7 @@ class FSDP_Trainer:
         self.perceptual_scale = snapshot["SP_SCALE"]
 
         LR = snapshot["LR"]
-        print(f'GPU[{self.rank}]: Resuming training at epoch {self.epochs_run} | LR = {LR}')
+        print(f'GPU[{self.local_rank}]: Resuming training at epoch {self.epochs_run} | LR = {LR}')
         return LR
 
 
@@ -124,23 +124,23 @@ class FSDP_Trainer:
 
         # потери обязаны быть синхронизированы между всеми GPU, храним их в тензорах
 
-        train_epo_noise_losses = torch.tensor(0.0).to(self.rank)
-        train_epo_feature_losses = torch.tensor(0.0).to(self.rank)
-        val_epo_losses = torch.tensor(0.0).to(self.rank)
+        train_epo_noise_losses = torch.tensor(0.0).to(self.local_rank)
+        train_epo_feature_losses = torch.tensor(0.0).to(self.local_rank)
+        val_epo_losses = torch.tensor(0.0).to(self.local_rank)
 
-        train_samples_done = torch.tensor(0).to(self.rank)
-        val_samples_done = torch.tensor(0).to(self.rank)
+        train_samples_done = torch.tensor(0.0).to(self.local_rank)
+        val_samples_done = torch.tensor(0.0).to(self.local_rank)
 
         self.model.train()
         for source, targets in self.train_data:
-            source = source.to(self.rank)
-            targets = targets.to(self.rank)
+            source = source.to(self.local_rank)
+            targets = targets.to(self.local_rank)
 
             noise_loss, feature_loss = self._train_batch(source, targets)
             train_epo_noise_losses += noise_loss
             train_epo_feature_losses += feature_loss
 
-            train_samples_done += torch.tensor(1.0).to(self.rank)
+            train_samples_done += torch.tensor(1.0).to(self.local_rank)
 
         # синхронизируем тренировочные потери на всех GPU
         torch.distributed.all_reduce(train_epo_noise_losses, op=torch.distributed.ReduceOp.SUM)
@@ -154,11 +154,11 @@ class FSDP_Trainer:
 
         self.model.eval()
         for source, targets in self.val_data:
-            source = source.to(self.rank)
-            targets = targets.to(self.rank)
+            source = source.to(self.local_rank)
+            targets = targets.to(self.local_rank)
 
             val_epo_losses += self._validate_batch(source, targets)
-            val_samples_done += torch.tensor(1.0).to(self.rank)
+            val_samples_done += torch.tensor(1.0).to(self.local_rank)
 
 
         torch.distributed.all_reduce(val_epo_losses, op=torch.distributed.ReduceOp.SUM)
@@ -166,7 +166,7 @@ class FSDP_Trainer:
 
         self.val_losses.append((val_epo_losses/val_samples_done).item())
 
-        print(f'GPU[{self.rank}]: Epoch {epoch} | Time {int(time.time()-start_time)}')
+        print(f'GPU[{self.local_rank}]: Epoch {epoch} | Time {int(time.time()-start_time)}')
 
 
     def _train_batch(self, source, targets):
@@ -200,8 +200,8 @@ class FSDP_Trainer:
 
     def _save_snapshot(self, epoch, name):
         # только процесс GPU:0 сохраняет модель
-        if self.rank != 0:
-            print(f"GPU[{self.rank}] Warning! The save procces was skipped")
+        if self.local_rank != 0:
+            print(f"GPU[{self.local_rank}] Warning! The save procces was skipped")
             return
 
         # ждем завершения всех процессов
@@ -253,12 +253,12 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
                           "embed_path": "data/embeds/sound_embeds.h5",
                           "lr": 0.0005,
                           "gamma": 0.98,
-                          "BS": 2,
+                          "BS": 3,
                           "unconditional_prob": 0.1,
                           "timesteps": 1000,
                           "save_every": save_every,
                           "snapshot_path": snapshot_path,
-                          "compile": False})
+                          "compile": True})
 
     # инициализируем датасет и модель
     dataset = EmbedsDataset(config.image_path, config.embed_path)
