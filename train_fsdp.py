@@ -17,6 +17,9 @@ from models.diffusion import Diffusion
 from utils.EmbedsDataset import EmbedsDataset
 import time
 
+import torch.distributed as dist
+from torch.distributed.fsdp import StateDictType
+
 
 class FSDP_Trainer:
     def __init__(self,
@@ -199,30 +202,47 @@ class FSDP_Trainer:
         return loss
 
     def _save_snapshot(self, epoch, name):
-        # только процесс GPU:0 сохраняет модель
-        if self.local_rank != 0:
-            print(f"GPU[{self.local_rank}] Warning! The save procces was skipped")
-            return
+        print(f"[Rank {self.rank}] Entered _save_snapshot")
 
-        # ждем завершения всех процессов
+        # Убедимся, что все процессы здесь
         torch.distributed.barrier()
+        print(f"[Rank {self.rank}] Passed pre-save barrier")
 
-        # загружаем на GPU:0 все веса
-        # ВНИМАНИЕ! Модель может не влезть на 1 карту
-        model_state_dict = FSDP.full_state_dict(self.model, rank0_only=True)
+        try:
+            with FSDP.state_dict_type(
+                self.model,
+                state_dict_type=StateDictType.FULL_STATE_DICT,
+            ):
+                print(f"[Rank {self.rank}] Gathering full state dict...")
+                full_state = self.model.state_dict()
 
-        snapshot = {}
-        # ВНИМАНИЕ! Возможны конфликты префиксов из-за обертки FSDP
-        snapshot["MODEL_STATE"] = self.model.module.state_dict()
-        snapshot["EPOCHS_RUN"] = epoch
-        snapshot["TRAIN_NOISE_LOSSES"] = self.train_noise_losses
-        snapshot["TRAIN_FEATURE_LOSSES"] = self.train_feature_losses
-        snapshot["VAL_LOSSES"] = self.val_losses
-        snapshot["LR"] = self.scheduler.get_last_lr()[0]
-        snapshot["SP_SCALE"] = self.perceptual_scale
+                from collections import OrderedDict
+                cleaned_state = OrderedDict()
+                for k, v in full_state.items():
+                    k = k.replace("_orig_mod.", "")
+                    k = k.replace("module.", "")
+                    cleaned_state[k] = v
 
-        torch.save(snapshot, f"{name}.pt")
-        print(f'Epoch {epoch} | Training snapshot saved at {name}.pt')
+                snapshot = {
+                    "MODEL_STATE": cleaned_state,
+                    "EPOCHS_RUN": epoch,
+                    "TRAIN_NOISE_LOSSES": self.train_noise_losses,
+                    "TRAIN_FEATURE_LOSSES": self.train_feature_losses,
+                    "VAL_LOSSES": self.val_losses,
+                    "LR": self.scheduler.get_last_lr()[0],
+                    "SP_SCALE": self.perceptual_scale
+                }
+                torch.save(snapshot, f"{name}.pt")
+                print(f"[Rank 0] Saved checkpoint to {name}.pt")
+
+            # Важно: выйти из контекста до барьера
+            torch.distributed.barrier()
+            if self.rank == 0:
+                print("Checkpointing complete.")
+
+        except Exception as e:
+            print(f"[Rank {self.rank}] Error during save: {e}")
+            raise
 
     def train(self, max_epochs: int):
         b_sz = len(next(iter(self.train_data))[0])
@@ -236,7 +256,6 @@ class FSDP_Trainer:
                 self._save_snapshot(epoch, "snapshot")
 
         self._save_snapshot(epoch, "result")
-
 
     def __del__(self):
         destroy_process_group()
@@ -273,6 +292,9 @@ def main(save_every: int, total_epochs: int, snapshot_path: str = "snapshot.pt")
         )
 
     trainer.train(total_epochs)
+
+    # на всякий случай явно вызываем деструктор
+    del trainer
 
 
 if __name__ == "__main__":
