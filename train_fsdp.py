@@ -77,7 +77,7 @@ class FSDP_Trainer:
         )
 
         # --- train tools ---
-        self.unconditional_prob = config.unconditional_prob
+        self.unconditional_prob = train_config.unconditional_prob
         self.save_every = config.save_every
 
         self.epochs_run = 0
@@ -162,26 +162,44 @@ class FSDP_Trainer:
         val_samples_done = torch.tensor(0.0).to(self.local_rank)
 
         self.model.train()
-        for source, targets in self.train_data:
-            source = source.to(self.local_rank)
-            targets = targets.to(self.local_rank)
+        # ветвление по двум типам потерь
+        if self.train_config.loss_type == "perceptual":
+            for source, targets in self.train_data:
+                source = source.to(self.local_rank)
+                targets = targets.to(self.local_rank)
 
-            noise_loss, feature_loss = self._train_batch(source, targets)
-            train_epo_noise_losses += noise_loss
-            train_epo_feature_losses += feature_loss
+                noise_loss, feature_loss = self._train_batch(source, targets)
+                train_epo_noise_losses += noise_loss
+                train_epo_feature_losses += feature_loss
 
-            train_samples_done += torch.tensor(1.0).to(self.local_rank)
+                train_samples_done += torch.tensor(1.0).to(self.local_rank)
 
-            if self.train_config.on_epo_scheduler:
-                self.scheduler.step()
+                if self.train_config.on_epo_scheduler:
+                    self.scheduler.step()
 
-        # синхронизируем тренировочные потери на всех GPU
-        torch.distributed.all_reduce(train_epo_noise_losses, op=torch.distributed.ReduceOp.SUM)
-        torch.distributed.all_reduce(train_epo_feature_losses, op=torch.distributed.ReduceOp.SUM)
-        torch.distributed.all_reduce(train_samples_done, op=torch.distributed.ReduceOp.SUM)
+            # синхронизируем тренировочные потери на всех GPU
+            dist.all_reduce(train_epo_noise_losses, op=torch.distributed.ReduceOp.SUM)
+            dist.all_reduce(train_epo_feature_losses, op=torch.distributed.ReduceOp.SUM)
+            dist.all_reduce(train_samples_done, op=torch.distributed.ReduceOp.SUM)
 
-        self.train_noise_losses.append((train_epo_noise_losses/train_samples_done).item())
-        self.train_feature_losses.append((train_epo_feature_losses/train_samples_done).item())
+            self.train_noise_losses.append((train_epo_noise_losses/train_samples_done).item())
+            self.train_feature_losses.append((train_epo_feature_losses/train_samples_done).item())
+
+        elif self.train_config.loss_type == "default":
+            for source, targets in self.train_data:
+                source = source.to(self.local_rank)
+                targets = targets.to(self.local_rank)
+
+                train_epo_noise_losses += self._default_train_batch(source, targets)
+                train_samples_done += torch.tensor(1.0).to(self.local_rank)
+
+                if self.train_config.on_epo_scheduler:
+                    self.scheduler.step()
+
+            dist.all_reduce(train_epo_noise_losses, op=torch.distributed.ReduceOp.SUM)
+            dist.all_reduce(train_samples_done, op=torch.distributed.ReduceOp.SUM)
+
+            self.train_noise_losses.append((train_epo_noise_losses/train_samples_done).item())
 
         if not self.train_config.on_epo_scheduler:
             self.scheduler.step()
@@ -195,14 +213,15 @@ class FSDP_Trainer:
             val_samples_done += torch.tensor(1.0).to(self.local_rank)
 
 
-        torch.distributed.all_reduce(val_epo_losses, op=torch.distributed.ReduceOp.SUM)
-        torch.distributed.all_reduce(val_samples_done, op=torch.distributed.ReduceOp.SUM)
+        dist.all_reduce(val_epo_losses, op=torch.distributed.ReduceOp.SUM)
+        dist.all_reduce(val_samples_done, op=torch.distributed.ReduceOp.SUM)
 
         self.val_losses.append((val_epo_losses/val_samples_done).item())
 
         print(f'GPU[{self.local_rank}]: Epoch {epoch} | Time {int(time.time()-start_time)}')
 
 
+    # шаг оптимизации с применением self perceptual loss
     def _train_batch(self, source, targets):
         # unconditional_prob - вероятность безусловной генерации
         if torch.rand(1) < self.unconditional_prob:
@@ -213,7 +232,9 @@ class FSDP_Trainer:
             noise_loss, feature_loss = self.diffusion.self_perceptual_loss(self.model, targets, source)
 
         # балансировка noise и self_perceptual потерь
+        # значимость  х  порог маштаба  х  потери на фичах  >  потери на шуме
         if (self.perceptual_scale*self.difference*feature_loss > noise_loss).item():
+            # постепенно уменьшаем значимость если потери на фичах слишком велики
             self.perceptual_scale = self.perceptual_scale * self.perceptual_gamma
 
         loss = self.perceptual_scale*feature_loss + noise_loss
@@ -222,7 +243,23 @@ class FSDP_Trainer:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        return noise_loss, feature_loss*self.perceptual_scale
+        # пишем потери на фичах без значимоти для лучшего понимания динамики внутри модели
+        return noise_loss, feature_loss
+
+    # шаг оптимизации с потерями на MSE
+    def _default_train_batch(self, source, targets):
+        if torch.rand(1) < self.unconditional_prob:
+            source = None
+
+        self.optimizer.zero_grad()
+        with autocast('cuda', dtype=torch.bfloat16):
+            loss = self.diffusion.loss_fn(self.model, targets, source)
+
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+
+        return loss
 
     # ВНИМАНИЕ! Валидация считается ТОЛЬКО по мини-батчу каждой конкретной GPU
     @torch.no_grad()
@@ -305,7 +342,6 @@ def main(save_every: int, total_epochs: int, train_type: str, snapshot_path: str
         "lr": 0.0005,
         "gamma": 0.98,
         "BS": 3,                                        #up to 10 on RTX 3090
-        "unconditional_prob": 0.1,
         "timesteps": 1000,
         "save_every": save_every,
         "snapshot_path": snapshot_path,
