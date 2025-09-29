@@ -77,7 +77,7 @@ class FSDP_Trainer:
         )
 
         # --- train tools ---
-        self.unconditional_prob = train_config.unconditional_prob
+        self.unconditional_prob = self.train_config.unconditional_prob
         self.save_every = config.save_every
 
         self.epochs_run = 0
@@ -124,7 +124,7 @@ class FSDP_Trainer:
             self.scheduler = torch.optim.lr_scheduler.LinearLR(
                 self.optimizer, 
                 start_factor=self.train_config.start_factor,
-                start_factor=self.train_config.end_factor,
+                end_factor=self.train_config.end_factor,
                 total_iters=len(self.train_data)
             )
         else:
@@ -196,6 +196,8 @@ class FSDP_Trainer:
                 if self.train_config.on_epo_scheduler:
                     self.scheduler.step()
 
+                break
+
             dist.all_reduce(train_epo_noise_losses, op=torch.distributed.ReduceOp.SUM)
             dist.all_reduce(train_samples_done, op=torch.distributed.ReduceOp.SUM)
 
@@ -204,6 +206,7 @@ class FSDP_Trainer:
         if not self.train_config.on_epo_scheduler:
             self.scheduler.step()
 
+        # осуществляем валидацию
         self.model.eval()
         for source, targets in self.val_data:
             source = source.to(self.local_rank)
@@ -270,18 +273,14 @@ class FSDP_Trainer:
         return loss
 
     def _save_snapshot(self, epoch, name):
-        print(f"[Rank {self.rank}] Entered _save_snapshot")
-
         # Убедимся, что все процессы здесь
         torch.distributed.barrier()
-        print(f"[Rank {self.rank}] Passed pre-save barrier")
 
         try:
             with FSDP.state_dict_type(
                 self.model,
                 state_dict_type=StateDictType.FULL_STATE_DICT,
             ):
-                print(f"[Rank {self.rank}] Gathering full state dict...")
                 full_state = self.model.state_dict()
 
                 from collections import OrderedDict
@@ -301,12 +300,10 @@ class FSDP_Trainer:
                     "SP_SCALE": self.perceptual_scale
                 }
                 torch.save(snapshot, f"{name}.pt")
-                print(f"[Rank 0] Saved checkpoint to {name}.pt")
 
             # Важно: выйти из контекста до барьера
             torch.distributed.barrier()
-            if self.rank == 0:
-                print("Checkpointing complete.")
+            print("Checkpointing complete.")
 
         except Exception as e:
             print(f"[Rank {self.rank}] Error during save: {e}")
