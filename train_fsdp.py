@@ -35,7 +35,7 @@ class FSDP_Trainer:
         world_size = int(os.environ["WORLD_SIZE"])
 
         # не поддерживается GPU на суперкомпе
-        # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
         # подгружаем требуемый сценарий обучения
         # warmup   - прогонка одной эпохи без perceptual loss увеличивая LR от нуля до установленного
@@ -90,7 +90,7 @@ class FSDP_Trainer:
         self.difference = 2.5
 
         # --- model ---
-        self.model = model.to(self.local_rank)
+        self.model = model.to(torch.bfloat16).to(self.local_rank)
 
         if os.path.exists(config.snapshot_path):
             LR = self._load_snapshot(config.snapshot_path)
@@ -130,7 +130,8 @@ class FSDP_Trainer:
         else:
             self.scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=config.gamma)
 
-        self.scaler = GradScaler()
+        # при компиляции не совместим с bfloat16
+        # self.scaler = GradScaler()
         if config.compile:
             self.model = torch.compile(self.model)
 
@@ -196,8 +197,6 @@ class FSDP_Trainer:
                 if self.train_config.on_epo_scheduler:
                     self.scheduler.step()
 
-                break
-
             dist.all_reduce(train_epo_noise_losses, op=torch.distributed.ReduceOp.SUM)
             dist.all_reduce(train_samples_done, op=torch.distributed.ReduceOp.SUM)
 
@@ -205,6 +204,8 @@ class FSDP_Trainer:
 
         if not self.train_config.on_epo_scheduler:
             self.scheduler.step()
+
+        self.optimizer.zero_grad(set_to_none=True)
 
         # осуществляем валидацию
         self.model.eval()
@@ -242,9 +243,11 @@ class FSDP_Trainer:
 
         loss = self.perceptual_scale*feature_loss + noise_loss
 
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        loss.backward()
+        self.optimizer.step()
+        # self.scaler.scale(loss).backward()
+        # self.scaler.step(self.optimizer)
+        # self.scaler.update()
 
         # пишем потери на фичах без значимоти для лучшего понимания динамики внутри модели
         return noise_loss, feature_loss
@@ -258,9 +261,11 @@ class FSDP_Trainer:
         with autocast('cuda', dtype=torch.bfloat16):
             loss = self.diffusion.loss_fn(self.model, targets, source)
 
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        loss.backward()
+        self.optimizer.step()
+        # self.scaler.scale(loss).backward()
+        # self.scaler.step(self.optimizer)
+        # self.scaler.update()
 
         return loss
 
@@ -338,7 +343,7 @@ def main(save_every: int, total_epochs: int, train_type: str, snapshot_path: str
         "embed_path": "data/embeds/sound_embeds.h5",
         "lr": 0.0005,
         "gamma": 0.98,
-        "BS": 3,                                        #up to 10 on RTX 3090
+        "BS": 5,                                        #up to 10 on RTX 3090
         "timesteps": 1000,
         "save_every": save_every,
         "snapshot_path": snapshot_path,
