@@ -86,7 +86,7 @@ class FSDP_Trainer:
         self.val_losses = []
 
         self.perceptual_gamma = 0.985
-        self.perceptual_scale = 0.2
+        self.perceptual_scale = 0.01
         self.difference = 2.5
 
         # --- model ---
@@ -142,7 +142,7 @@ class FSDP_Trainer:
         self.train_noise_losses = snapshot["TRAIN_NOISE_LOSSES"]
         self.train_feature_losses = snapshot["TRAIN_FEATURE_LOSSES"]
         self.val_losses = snapshot["VAL_LOSSES"]
-        self.perceptual_scale = snapshot["SP_SCALE"]
+        # self.perceptual_scale = snapshot["SP_SCALE"]
 
         LR = snapshot["LR"]
         print(f'GPU[{self.local_rank}]: Resuming training at epoch {self.epochs_run} | LR = {LR}')
@@ -250,7 +250,7 @@ class FSDP_Trainer:
         # self.scaler.update()
 
         # пишем потери на фичах без значимоти для лучшего понимания динамики внутри модели
-        return noise_loss, feature_loss
+        return noise_loss.detach(), feature_loss.detach()
 
     # шаг оптимизации с потерями на MSE
     def _default_train_batch(self, source, targets):
@@ -267,7 +267,7 @@ class FSDP_Trainer:
         # self.scaler.step(self.optimizer)
         # self.scaler.update()
 
-        return loss
+        return loss.detach()
 
     # ВНИМАНИЕ! Валидация считается ТОЛЬКО по мини-батчу каждой конкретной GPU
     @torch.no_grad()
@@ -309,6 +309,7 @@ class FSDP_Trainer:
             # Важно: выйти из контекста до барьера
             torch.distributed.barrier()
             print("Checkpointing complete.")
+            torch.cuda.empty_cache()
 
         except Exception as e:
             print(f"[Rank {self.rank}] Error during save: {e}")
@@ -343,7 +344,7 @@ def main(save_every: int, total_epochs: int, train_type: str, snapshot_path: str
         "embed_path": "data/embeds/sound_embeds.h5",
         "lr": 0.0005,
         "gamma": 0.98,
-        "BS": 5,                                        #up to 10 on RTX 3090
+        "BS": 3,                                        #up to 10 on RTX 3090
         "timesteps": 1000,
         "save_every": save_every,
         "snapshot_path": snapshot_path,
